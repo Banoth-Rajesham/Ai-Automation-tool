@@ -1,0 +1,5 @@
+{
+  "name": "Email Automator",
+  "description": "An AI-powered email automation dashboard that allows users to manage prospect lists, generate email previews with Gemini, send campaigns, and check replies through a conversational interface.",
+  "requestFramePermissions": []
+}

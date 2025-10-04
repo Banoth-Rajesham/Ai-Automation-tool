@@ -1,0 +1,17 @@
+.background-video-container {
+  --video-brightness: 1;
+}
+
+.background-video {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  min-width: 100%;
+  min-height: 100%;
+  width: auto;
+  height: auto;
+  z-index: -1; /* Puts the video behind other content */
+  background-size: cover;
+  /* Optional: Add a dark overlay for better text readability */
+  filter: brightness(var(--video-brightness));
+}

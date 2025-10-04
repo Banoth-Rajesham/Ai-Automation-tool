@@ -1,0 +1,68 @@
+/* From Uiverse.io by Yaya12085 */
+.dataSourceContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.dataSourceLabel {
+  height: 40px;
+  width: 120px;
+  background-color: #ffffff;
+  border-radius: 20px;
+  box-shadow: inset 0 0 5px 2px rgba(255, 255, 255, 1),
+    inset 0 0 10px 1px rgba(0, 0, 0, 0.2), 5px 10px 15px rgba(0, 0, 0, 0.05),
+    inset 0 0 0 2px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.4s;
+}
+
+.dataSourceLabel:hover {
+  transform: perspective(100px) rotateX(5deg) rotateY(-5deg);
+}
+
+#dataSourceCheckbox:checked ~ .dataSourceLabel:hover {
+  transform: perspective(100px) rotateX(-5deg) rotateY(5deg);
+}
+
+#dataSourceCheckbox {
+  display: none;
+}
+
+#dataSourceCheckbox:checked ~ .dataSourceLabel::before {
+  left: 75px;
+  background-color: #000000;
+  background-image: linear-gradient(315deg, #000000 0%, #414141 70%);
+  transition: 0.4s;
+}
+
+.dataSourceLabel::before {
+  position: absolute;
+  content: "";
+  height: 30px;
+  width: 30px;
+  border-radius: 50%;
+  background-color: #000000;
+  background-image: linear-gradient(
+    130deg,
+    #757272 10%,
+    #ffffff 11%,
+    #726f6f 62%
+  );
+  left: 5px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.2), 5px 5px 5px rgba(0, 0, 0, 0.1);
+  transition: 0.4s;
+}
+
+.dataSourceText {
+    transition: color 0.3s ease-in-out;
+    font-weight: 600;
+}
+
+.dataSourceText.active {
+    color: #2563eb; /* text-blue-600 */
+}
