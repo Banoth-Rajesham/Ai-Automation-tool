@@ -504,8 +504,9 @@ async function handleWebScraping(prompt: string): Promise<AssistantMessageData> 
 - Return a valid JSON object with a single key "entities", which is an array of strings.
 
 Examples:
-- Input: "top psychology colleges in hyderabad" -> Output: {"entities": ["Nizam College", "Loyola Academy", "St. Ann's College for Women"]}
-- Input: "contact page for Morphius, a company in India" -> Output: {"entities": ["Morphius"]}
+- Input: "top collage in bba hydarabad contact info" -> Output: {"entities": ["ICFAI Business School, Hyderabad", "Amity University, Hyderabad", "GITAM (Deemed to be University), Hyderabad"]}
+- Input: "contact page for Morphius, a company in India"
+  Output: {"entities": ["Morphius"]}
 `;
     const { entities } = await getJsonFromOpenAI(entityFinderSystemPrompt, prompt);
 
@@ -513,13 +514,13 @@ Examples:
         return { text: "I couldn't identify any specific entities from your query to search for." };
     }
 
-    // Step 2: For each entity, find its contact page URL.
+    // Step 2: For each entity, find its contact page URL. This is a more targeted and robust approach.
     const urlFinderSystemPrompt = `You are an intelligent web search agent. For the given entity name, find the most relevant URL for their contact information.
 - Prioritize "Contact Us", "About Us", or official homepages.
 - Return a valid JSON object with a single key "url", which is a string.
 
 Examples:
-- Input: "Nizam College" -> Output: {"url": "https://www.nizamcollege.ac.in/contact-us/"}
+- Input: "ICFAI Business School, Hyderabad" -> Output: {"url": "https://www.icfaiuniversity.in/contact-us.html"}
 - Input: "Morphius" -> Output: {"url": "https://www.morphius.in/contact-us"}
 `;
     const urlPromises = entities.map((entity: string) => getJsonFromOpenAI(urlFinderSystemPrompt, `contact page for ${entity}`));
@@ -530,7 +531,7 @@ Examples:
         .map(result => (result as PromiseFulfilledResult<{url: string}>).value.url);
 
     if (scrapeTargets.length === 0) {
-        return { text: `I found entities but could not find any contact pages for them.` };
+        return { text: `I identified the following entities: ${entities.join(', ')}, but could not find any contact pages for them.` };
     }
 
     const allLeads: any[] = [];
