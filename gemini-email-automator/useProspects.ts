@@ -28,16 +28,10 @@ export const useProspects = () => {
   useEffect(() => {
     const fetchInitialProspects = async () => {
       try {
+        // Always start by trying to load from localStorage.
         const storedProspectsJson = localStorage.getItem('savedProspects') || '[]';
         const loadedProspects = JSON.parse(storedProspectsJson);
-
-        if (loadedProspects.length > 0) {
-          setProspects(loadedProspects);
-        } else {
-          // Only load the default CSV if no prospects are stored in localStorage
-          const initialCsvProspects = await getProspectsFromCsv();
-          setProspects(initialCsvProspects);
-        }
+        setProspects(loadedProspects);
       } catch (error) {
         console.error("Failed to load initial prospects:", error);
       }

@@ -2,10 +2,8 @@ import React from 'react';
 import { type ScrapedItem } from '../types';
 import { unparse } from 'papaparse';
 
-const getPhoneNumbers = (item: ScrapedItem) => {
-  const phoneNumbers = item.websites?.filter(w => w.type === 'phone').map(w => w.url) || [];
-  return phoneNumbers.length > 0 ? phoneNumbers.join(' / ') : 'N/A';
-};
+const getPhoneNumbers = (item: ScrapedItem) =>
+  item.phone_numbers && item.phone_numbers.length > 0 ? item.phone_numbers.join(' / ') : 'N/A';
 
 const getEmails = (item: ScrapedItem) => {
   const allEmails = [item.work_email, ...(item.personal_emails || [])].filter(Boolean);
@@ -16,6 +14,7 @@ interface ScrapedDataViewProps {
   scrapedData: ScrapedItem[];
   onClearAll: () => void;
   onMoveToProspects: (item: ScrapedItem) => void;
+  onMoveAllToProspects: () => void;
 }
 
 const downloadCsv = (data: any[], filename: string) => {
@@ -38,7 +37,7 @@ const downloadCsv = (data: any[], filename: string) => {
   }
 };
 
-export const ScrapedDataView: React.FC<ScrapedDataViewProps> = ({ scrapedData, onClearAll, onMoveToProspects }) => {
+export const ScrapedDataView: React.FC<ScrapedDataViewProps> = ({ scrapedData, onClearAll, onMoveToProspects, onMoveAllToProspects }) => {
   const handleDownload = () => {
     if (scrapedData.length === 0) {
       alert("No data to download.");
@@ -47,6 +46,8 @@ export const ScrapedDataView: React.FC<ScrapedDataViewProps> = ({ scrapedData, o
 
     const dataForCsv = scrapedData.map(item => ({
       company: item.company,
+      full_name: item.full_name,
+      role: item.role,
       work_email: item.work_email,
       personal_emails: (item.personal_emails || []).join(', '),
       phone: getPhoneNumbers(item),
@@ -65,6 +66,14 @@ export const ScrapedDataView: React.FC<ScrapedDataViewProps> = ({ scrapedData, o
           Scraped Data ({scrapedData.length})
         </h1>
         <div className="flex gap-2">
+          <button
+            onClick={onMoveAllToProspects}
+            disabled={scrapedData.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg shadow-md hover:bg-green-700 transition-colors disabled:bg-slate-400 disabled:cursor-not-allowed"
+          >
+            <span className="material-symbols-outlined">move_up</span>
+            Move All to Prospects
+          </button>
           <button
             onClick={onClearAll}
             disabled={scrapedData.length === 0}
@@ -87,13 +96,12 @@ export const ScrapedDataView: React.FC<ScrapedDataViewProps> = ({ scrapedData, o
         <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
           <thead className="bg-slate-50 dark:bg-slate-700">
             <tr>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Company</th>
+              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Name</th>
+              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Role</th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Email</th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Phone</th>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Address</th>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">
-                Original Query
-              </th>
+              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Source Details</th>
+              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Confidence</th>
               <th scope="col" className="relative py-3.5 px-4">
                 <span className="sr-only">Actions</span>
               </th>
@@ -102,22 +110,19 @@ export const ScrapedDataView: React.FC<ScrapedDataViewProps> = ({ scrapedData, o
           <tbody className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
             {scrapedData.map((item) => (
               <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                <td className="py-4 px-4 text-sm font-medium text-slate-900 dark:text-slate-200">{item.company || 'N/A'}</td>
+                <td className="py-4 px-4 text-sm font-medium text-slate-900 dark:text-slate-200">{item.full_name || 'N/A'}</td>
+                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{item.role || 'N/A'}</td>
                 <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{getEmails(item)}</td>
                 <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{getPhoneNumbers(item)}</td>
-                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{item.source_details || 'N/A'}</td>
-                <td className="whitespace-nowrap py-4 px-4 text-sm text-slate-500 dark:text-slate-400">
-                  <span className="line-clamp-2" title={item.query}>
-                    {item.query}
-                  </span>
-                </td>
+                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400" title={item.query}>{item.source_details || 'N/A'}</td>
+                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{item.confidence_score || 0}%</td>
                 <td className="relative whitespace-nowrap py-4 px-4 text-right text-sm font-medium">
                   <button
                     onClick={() => onMoveToProspects(item)}
-                    className="text-blue-600 hover:text-blue-800 dark:text-blue-500 dark:hover:text-blue-400"
+                    className="px-3 py-1 text-xs font-semibold text-white bg-blue-600 rounded-full hover:bg-blue-700 transition-colors"
                     title="Move to Prospects"
                   >
-                    Move to Prospects
+                    Move
                   </button>
                 </td>
               </tr>

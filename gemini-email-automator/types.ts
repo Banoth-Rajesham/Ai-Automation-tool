@@ -18,12 +18,15 @@ export interface Prospect {
   company_id: string;
   work_email?: string; // Made optional
   personal_emails?: string[];
+  phone_numbers?: string[];
   websites?: { type: string; url: string }[];
   country?: string;
   jurisdiction?: string; // e.g., "GDPR", "CCPA"
   lawful_basis?: 'consent' | 'legitimate_interest';
   source?: string;
   source_details?: string;
+  query?: string;
+  confidence_score?: number;
   tags?: string[];
   recent_company_events?: string[]; // For richer context
   created_at: string; // ISO 8601 date string
@@ -89,7 +92,7 @@ export interface AssistantMessageData {
   sourceUrl?: string;
 }
 
-export type ViewType = 'dashboard' | 'prospects' | 'previews' | 'send' | 'replies' | 'scraped' | 'scraper_input';
+export type ViewType = 'dashboard' | 'prospects' | 'previews' | 'send' | 'replies' | 'scraped' | 'scraper_input' | 'database';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -101,13 +104,17 @@ export interface ChatMessage {
 export type DataSource = 'contactout' | 'webscraping';
 
 export interface ScrapedItem {
+  _id?: string; // MongoDB adds an _id field
   id: string;
   full_name: string;
   company: string;
+  role?: string;
   work_email: string;
   personal_emails: string[];
+  phone_numbers: string[];
   websites: { type: string; url: string }[];
   source_details: string;
   source: string;
   query: string;
+  confidence_score?: number;
 }

@@ -19,19 +19,14 @@ const downloadCsv = (data: any[], filename: string) => {
   }
 };
 
-const getPhoneNumbers = (prospect: Prospect) => {
-  return prospect.phone_numbers && prospect.phone_numbers.length > 0 ? prospect.phone_numbers.join(' / ') : 'N/A';
-};
-
 interface ProspectsViewProps {
   prospects: Prospect[];
   selectedIds: Set<string>;
   onSelectionChange: (ids: Set<string>) => void;
   onDeleteProspect: (id: string) => void;
-  onReturnToScraped: (prospect: Prospect) => void;
 }
 
-export const ProspectsView: React.FC<ProspectsViewProps> = ({ prospects, selectedIds, onSelectionChange, onDeleteProspect, onReturnToScraped }) => {
+export const ProspectsView: React.FC<ProspectsViewProps> = ({ prospects, selectedIds, onSelectionChange, onDeleteProspect }) => {
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
       onSelectionChange(new Set(prospects.map(p => p.id)));
@@ -59,16 +54,11 @@ export const ProspectsView: React.FC<ProspectsViewProps> = ({ prospects, selecte
     const dataForCsv = prospects.map(p => ({
       full_name: p.full_name,
       work_email: p.work_email,
-      personal_emails: (p.personal_emails || []).join(', '),
-      phone_numbers: (p.phone_numbers || []).join(', '),
       company: p.company,
       role: p.role,
-      website: (p.websites?.map(w => w.url) || []).join(', '),
-      confidence_score: p.confidence_score,
       country: p.country,
       source: p.source,
       source_details: p.source_details,
-      query: p.query,
     }));
 
     const filename = `prospects_data_${new Date().toISOString().split('T')[0]}.csv`;
@@ -97,15 +87,9 @@ export const ProspectsView: React.FC<ProspectsViewProps> = ({ prospects, selecte
               <th scope="col" className="p-4"><input type="checkbox" onChange={handleSelectAll} checked={selectedIds.size === prospects.length && prospects.length > 0} /></th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Name</th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Email</th>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Personal Emails</th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Company</th>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Mobile Number</th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Role</th>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Website</th>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Confidence</th>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Source Details</th>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Query</th>
-              <th scope="col" className="relative py-3.5 px-4 text-left text-sm font-semibold">Actions</th>
+              <th scope="col" className="relative py-3.5 px-4"><span className="sr-only">Delete</span></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
@@ -113,19 +97,10 @@ export const ProspectsView: React.FC<ProspectsViewProps> = ({ prospects, selecte
               <tr key={prospect.id} className={selectedIds.has(prospect.id) ? 'bg-blue-50 dark:bg-blue-900/50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}>
                 <td className="p-4"><input type="checkbox" checked={selectedIds.has(prospect.id)} onChange={() => handleSelectOne(prospect.id)} /></td>
                 <td className="py-4 px-4 text-sm font-medium text-slate-900 dark:text-slate-200">{prospect.full_name}</td>
-                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400"><a href={`mailto:${prospect.work_email}`} className="hover:text-blue-500">{prospect.work_email || 'N/A'}</a></td>
-                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{(prospect.personal_emails || []).join(', ') || 'N/A'}</td>
+                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{prospect.work_email || 'N/A'}</td>
                 <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{prospect.company || 'N/A'}</td>
-                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{getPhoneNumbers(prospect)}</td>
                 <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{prospect.role || 'N/A'}</td>
-                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400"><a href={prospect.websites?.[0]?.url} target="_blank" rel="noopener noreferrer" className="hover:text-blue-500">{prospect.websites?.[0]?.url || 'N/A'}</a></td>
-                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{prospect.confidence_score ? `${prospect.confidence_score}%` : 'N/A'}</td>
-                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400" title={prospect.source_details}>{prospect.source_details || 'N/A'}</td>
-                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{prospect.query || 'N/A'}</td>
-                <td className="py-4 px-4 text-right text-sm font-medium space-x-2 whitespace-nowrap">
-                  <button onClick={() => onReturnToScraped(prospect)} className="text-amber-600 hover:text-amber-800">Return</button>
-                  <button onClick={() => onDeleteProspect(prospect.id)} className="text-red-600 hover:text-red-800">Delete</button>
-                </td>
+                <td className="py-4 px-4 text-right text-sm"><button onClick={() => onDeleteProspect(prospect.id)} className="text-red-600 hover:text-red-800">Delete</button></td>
               </tr>
             ))}
           </tbody>

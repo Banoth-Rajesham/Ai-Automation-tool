@@ -3,12 +3,13 @@ import React, { useState } from 'react';
 import BackgroundVideo from './BackgroundVideo';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
-import { type ChatMessage, type ViewType, type Prospect, type DataSource } from './types';
+import { type ChatMessage, type ViewType, type Prospect, type DataSource, type ScrapedItem } from './types';
 import { processUserPrompt, getProspectsFromCsv, generateUUID } from './aiService';
 import { ProspectsView } from './components/ProspectsView';
 import { ScrapedDataView } from './components/ScrapedDataView';
 import { useProspects } from './useProspects';
 import { useScrapedData,  } from './useScrapedData';
+import { MongoDbView } from './components/MongoDbView';
 import { WebScraperView } from './components/WebScraperView';
 
 const App: React.FC = () => {
@@ -76,8 +77,7 @@ const App: React.FC = () => {
       const isProspectDataArray = (data: any): data is Partial<Prospect>[] => {
         return (
           Array.isArray(data) &&
-          data.length > 0 &&
-          ('full_name' in data[0] || 'work_email' in data[0] || 'company' in data[0])
+          data.length > 0 && 'full_name' in data[0] && !('query' in data[0])
         );
       };
 
@@ -162,22 +162,74 @@ const App: React.FC = () => {
 
   const handleMoveToProspects = (scrapedItem: ScrapedItem) => {
     const newProspect: Prospect = {
-      id: scrapedItem.id,
+      id: scrapedItem.id || generateUUID(),
       full_name: scrapedItem.full_name || 'N/A',
       company: scrapedItem.company,
+      role: scrapedItem.role,
       work_email: scrapedItem.work_email,
       personal_emails: scrapedItem.personal_emails,
+      phone_numbers: scrapedItem.phone_numbers || [],
       websites: scrapedItem.websites,
       source: scrapedItem.source,
       source_details: scrapedItem.source_details,
+      query: scrapedItem.query,
+      confidence_score: scrapedItem.confidence_score,
       created_at: new Date().toISOString(),
       company_id: '',
       jurisdiction: 'N/A',
       lawful_basis: 'legitimate_interest',
+      // UI compatibility fields
+      prospect_name: scrapedItem.full_name || 'N/A',
+      email: scrapedItem.work_email,
     };
     addProspects([newProspect]);
     // Optional: remove from scraped data after moving
     // clearScrapedData(); // or a function to remove a single item
+  };
+
+  const handleReturnToScraped = (prospect: Prospect) => {
+    const scrapedItem: ScrapedItem = {
+      id: prospect.id,
+      full_name: prospect.full_name,
+      company: prospect.company || '',
+      role: prospect.role,
+      work_email: prospect.work_email || '',
+      personal_emails: prospect.personal_emails || [],
+      phone_numbers: prospect.phone_numbers || [],
+      websites: prospect.websites || [],
+      source: prospect.source || 'returned_from_prospects',
+      source_details: prospect.source_details || '',
+      query: prospect.query || '',
+      confidence_score: prospect.confidence_score,
+    };
+
+    addScrapedData([scrapedItem]);
+    deleteProspect(prospect.id);
+  };
+
+  const handleMoveAllToProspects = () => {
+    if (scrapedData.length === 0) return;
+
+    const newProspects = scrapedData.map(scrapedItem => ({
+      id: scrapedItem.id || generateUUID(),
+      full_name: scrapedItem.full_name || 'N/A',
+      company: scrapedItem.company,
+      role: scrapedItem.role,
+      work_email: scrapedItem.work_email,
+      personal_emails: scrapedItem.personal_emails,
+      phone_numbers: scrapedItem.phone_numbers || [],
+      websites: scrapedItem.websites,
+      source: scrapedItem.source,
+      source_details: scrapedItem.source_details,
+      query: scrapedItem.query,
+      confidence_score: scrapedItem.confidence_score,
+      created_at: new Date().toISOString(),
+      company_id: '',
+      jurisdiction: 'N/A',
+      lawful_basis: 'legitimate_interest' as const,
+    }));
+    addProspects(newProspects);
+    clearScrapedData(); // Clear the scraped data after moving
   };
 
   const renderCurrentView = () => {
@@ -188,12 +240,14 @@ const App: React.FC = () => {
           selectedIds={selectedProspectIds}
           onSelectionChange={setSelectedProspectIds}
           onDeleteProspect={handleDeleteProspect}
+          onReturnToScraped={handleReturnToScraped}
         />;
       case 'scraped':
         return <ScrapedDataView 
           scrapedData={scrapedData} 
           onClearAll={clearScrapedData}
           onMoveToProspects={handleMoveToProspects}
+          onMoveAllToProspects={handleMoveAllToProspects}
         />;
       case 'scraper_input':
         return <WebScraperView
@@ -201,6 +255,8 @@ const App: React.FC = () => {
           isLoading={isLoading}
           messages={messages}
         />;
+      case 'database':
+        return <MongoDbView />;
       case 'dashboard':
       default:
         return (

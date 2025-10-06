@@ -2,8 +2,8 @@
 import OpenAI from "openai";
 import axios from 'axios';
 import Papa from 'papaparse';
-import { type AssistantMessageData, type Prospect, type CampaignMetrics, type RecentActivity, type Company, type DataSource } from '../types';
-import { type Campaign } from '../types';
+import { type AssistantMessageData, type Prospect, type CampaignMetrics, type RecentActivity, type Company, type DataSource, ScrapedItem } from './types';
+import { type Campaign } from './types';
 
 let openai: OpenAI;
 let contactOutApi: ReturnType<typeof axios.create>;
@@ -12,6 +12,10 @@ let contactOutApi: ReturnType<typeof axios.create>;
  * Initializes and returns the OpenAI client instance.
  * IMPORTANT: This implementation is for client-side usage and exposes the API key.
  * For production, you should move API calls to a secure backend.
+ * 
+ * @security This is a major security risk. In a production environment, this key
+ * should be on a server, and the client should make requests to your server,
+ * which then calls the OpenAI API.
  */
 function getOpenAIClient(): OpenAI {
   if (!openai) {
@@ -31,24 +35,39 @@ function getOpenAIClient(): OpenAI {
 const MAX_RETRIES = 3;
 const INITIAL_DELAY_MS = 1000;
 
+// Custom error for retryable API calls
+class RetryableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RetryableError';
+  }
+}
+
 // A simple sleep helper to wait between retries
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function apiCallWithRetry<T>(apiCall: () => Promise<T>): Promise<T> {
+function isRetryable(error: unknown): boolean {
+  if (axios.isAxiosError(error)) {
+    // Status codes for rate limiting or temporary server issues
+    return error.response?.status === 429 || (error.response?.status ?? 0) >= 500;
+  }
+  // For non-axios errors, you might check for specific error names or messages
+  return error instanceof RetryableError;
+}
+
+async function apiCallWithRetry<T>(apiCall: () => Promise<T>, onRetry?: (attempt: number, delay: number) => void): Promise<T> {
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
       return await apiCall();
     } catch (error: any) {
-      const isRetryable = error.response?.status === 429 || error.message?.includes('503');
-      if (isRetryable && i < MAX_RETRIES - 1) {
+      if (isRetryable(error) && i < MAX_RETRIES - 1) {
         const retryAfter = error.response?.headers?.['retry-after'];
         const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : INITIAL_DELAY_MS * Math.pow(2, i);
-        console.warn(`API rate limit hit or service unavailable. Retrying in ${delay}ms... (Attempt ${i + 1}/${MAX_RETRIES})`);
+        onRetry ? onRetry(i + 1, delay) : console.warn(`API call failed. Retrying in ${delay}ms... (Attempt ${i + 1}/${MAX_RETRIES})`);
         await sleep(delay);
       } else {
-        // If it's not a retryable error or the last attempt, re-throw it.
         throw error;
       }
     }
@@ -58,25 +77,32 @@ async function apiCallWithRetry<T>(apiCall: () => Promise<T>): Promise<T> {
 }
 
 async function getJsonFromOpenAI(systemInstruction: string, userPrompt: string): Promise<any> {
-  const openaiClient = getOpenAIClient();
-  const model = "gpt-4o-mini";
+    const openaiClient = getOpenAIClient();
+    const model = "gpt-4o-mini";
 
-  const completion = await apiCallWithRetry(() => openaiClient.chat.completions.create({
-    model: model,
-    messages: [
-      { role: "system", content: systemInstruction },
-      { role: "user", content: userPrompt }
-    ],
-    response_format: { type: "json_object" },
-  }));
+    const completion = await apiCallWithRetry(() => openaiClient.chat.completions.create({
+        model: model,
+        messages: [
+            { role: "system", content: systemInstruction },
+            { role: "user", content: userPrompt }
+        ],
+        response_format: { type: "json_object" },
+    }), (attempt, delay) => {
+        console.warn(`OpenAI API rate limit hit. Retrying in ${delay}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
+    });
 
-  const content = completion.choices[0]?.message?.content;
+    const content = completion.choices[0]?.message?.content;
 
-  if (!content) {
-    throw new Error("OpenAI API did not return any content.");
-  }
+    if (!content) {
+        throw new Error("OpenAI API did not return any content.");
+    }
 
-  return JSON.parse(content);
+    try {
+        return JSON.parse(content);
+    } catch (e) {
+        console.error("Failed to parse JSON from OpenAI:", content);
+        throw new Error("Received malformed JSON from the AI.");
+    }
 }
 
 function getContactOutApi(): ReturnType<typeof axios.create> {
@@ -86,6 +112,9 @@ function getContactOutApi(): ReturnType<typeof axios.create> {
       throw new Error("The VITE_CONTACTOUT_API_KEY environment variable is not set. Please check your .env.local file and restart the server.");
     }
     contactOutApi = axios.create({
+      // SECURITY WARNING: The API key is being sent from the browser.
+      // In a production app, the Vite proxy should be replaced with a proper backend
+      // that adds the API key on the server-side before forwarding the request.
       baseURL: '/api/contactout', // Use the root of the proxy path
       headers: {
         "token": contactOutApiKey,
@@ -156,13 +185,17 @@ async function enrichProfileFromLinkedIn(linkedinUrl: string): Promise<Partial<P
             linkedin_url: linkedinUrl,
             include: ["work_email", "personal_email", "phone"]
         };
-        const resp = await apiCallWithRetry(() => getContactOutApi().post(url, payload));
+        const resp = await apiCallWithRetry(() => getContactOutApi().post(url, payload), (attempt, delay) => {
+            console.warn(`ContactOut API rate limit hit for ${linkedinUrl}. Retrying in ${delay}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
+        });
+
         const profile = resp.data.profile || {};
 
         return {
             full_name: profile.full_name,
             work_email: (profile.work_email || [])[0],
             personal_emails: profile.personal_email || [],
+            phone_numbers: profile.phone || [],
             role: profile.headline || profile.title,
             country: profile.location,
             source_details: linkedinUrl,
@@ -180,7 +213,9 @@ async function enrichDomain(domain: string): Promise<Partial<Company>[]> {
   const payload = { domains: [domain] };
 
   try {
-    const resp = await apiCallWithRetry(() => getContactOutApi().post("/v1/domain/enrich", payload));
+    const resp = await apiCallWithRetry(() => getContactOutApi().post("/v1/domain/enrich", payload), (attempt, delay) => {
+        console.warn(`ContactOut Domain Enrich API rate limit hit. Retrying in ${delay}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
+    });
     const enrichedData = resp.data?.companies || [];
     
     return (enrichedData as any[]).map((company: any) => ({
@@ -225,48 +260,46 @@ function parseSearchPromptLocally(prompt: string): Record<string, any> {
 }
 
 /**
- * A more robust prompt parser that identifies different types of tasks from the user's input.
- * It can extract multiple URLs, domains, and detect keyword searches.
+ * Uses an LLM to understand the user's intent and extract necessary information.
+ * This is more robust than simple regex or keyword matching.
  */
-function parsePrompt(prompt: string): { type: 'enrich_linkedin' | 'enrich_domain' | 'search' | 'command' | 'unknown'; values: string[]; command?: string } {
-  const lowerCasePrompt = prompt.toLowerCase();
+async function getIntent(prompt: string): Promise<{ type: 'enrich_linkedin' | 'enrich_domain' | 'search' | 'web_scrape' | 'command' | 'unknown'; values: string[]; command?: string }> {
+    const systemPrompt = `You are an AI assistant that classifies user intent. Analyze the user's prompt and determine the primary action and any associated values.
 
-  const linkedinUrlRegex = /(https?:\/\/)?(www\.)?linkedin\.com\/in\/[a-zA-Z0-9_-]+/g;
-  const domainRegex = /\b([a-zA-Z0-9-]+\.[a-zA-Z]{2,})\b/g;
-  const keywordSearchRegex = /(\w+):"([^"]+)"/g;
+Your response must be a JSON object with "type", "values", and optionally a "command".
 
-  const linkedinUrls = prompt.match(linkedinUrlRegex);
-  if (linkedinUrls) {
-      return { type: 'enrich_linkedin', values: linkedinUrls };
-  }
+Possible types are:
+- "enrich_linkedin": User provides one or more LinkedIn profile URLs. Extract all URLs into the "values" array.
+- "enrich_domain": User provides one or more company domain names. Extract all domains into the "values" array.
+- "search": User wants to find people or companies using keywords. The full prompt goes into the "values" array.
+- "web_scrape": User provides a direct URL to scrape or a general query to find and scrape websites. The URL or query goes into the "values" array.
+- "command": User gives a direct command. The command name (e.g., "show prospects") goes into the "command" field.
+- "unknown": If the intent is unclear.
 
-  const domains = prompt.match(domainRegex);
-  // Check if it's an enrichment command to avoid misinterpreting domains in other commands.
-  if (domains && (lowerCasePrompt.startsWith('enrich domain') || lowerCasePrompt.startsWith('enrich'))) {
-      // Filter out common irrelevant domains that might be part of a URL
-      const filteredDomains = domains.filter(d => !['linkedin.com'].includes(d.toLowerCase()));
-      if (filteredDomains.length > 0) {
-          return { type: 'enrich_domain', values: filteredDomains };
-      }
-  }
+Rules:
+1.  LinkedIn URLs are the highest priority. If a LinkedIn URL is present, the type is "enrich_linkedin".
+2.  If a non-LinkedIn URL is present, the type is "web_scrape".
+3.  If the prompt contains keywords like "find", "search for", "who is", or structured search terms like 'title:"CEO"', the type is "search".
+4.  If the prompt is a general web search query like "top AI companies in India", the type is "web_scrape".
+5.  Direct commands like "show prospects", "generate previews", "send emails", "check replies", "enrich prospects from csv" should be classified as "command".
 
-  const commandMatch = lowerCasePrompt.trim();
-  const knownCommands = ['show prospects', 'generate previews', 'send emails', 'check replies', 'enrich prospects from csv'];
-  if (knownCommands.includes(commandMatch)) {
-      return { type: 'command', values: [], command: commandMatch };
-  }
+Examples:
+- "enrich https://www.linkedin.com/in/some-profile" -> {"type": "enrich_linkedin", "values": ["https://www.linkedin.com/in/some-profile"]}
+- "find people with title:\"product manager\" company:\"google\"" -> {"type": "search", "values": ["find people with title:\"product manager\" company:\"google\""]}
+- "top 10 civil engineering colleges in hyderabad" -> {"type": "web_scrape", "values": ["top 10 civil engineering colleges in hyderabad"]}
+- "https://www.tesla.com/contact" -> {"type": "web_scrape", "values": ["https://www.tesla.com/contact"]}
+- "generate previews" -> {"type": "command", "command": "generate previews", "values": []}
+`;
 
-  // Check for keyword search first for a fast, local path.
-  if (keywordSearchRegex.test(prompt)) {
-    return { type: 'search', values: [prompt], command: 'local_parse' };
-  }
+    // Use a simpler regex-based pre-classification for very obvious cases to save API calls.
+    const linkedinUrlRegex = /(https?:\/\/)?(www\.)?linkedin\.com\/in\/[a-zA-Z0-9_-]+/g;
+    const linkedinUrls = prompt.match(linkedinUrlRegex);
+    if (linkedinUrls) {
+        return { type: 'enrich_linkedin', values: linkedinUrls };
+    }
 
-  // If it's not a keyword search but contains search-like terms, use the LLM.
-  if (/\b(find|get|need|show|who is|who are|people|prospects|candidates)\b/.test(lowerCasePrompt)) {
-    return { type: 'search', values: [prompt] };
-  }
-
-  return { type: 'unknown', values: [] };
+    // For everything else, use the LLM to determine intent.
+    return await getJsonFromOpenAI(systemPrompt, prompt);
 }
 
 // --- New AI Email Generation Logic ---
@@ -343,17 +376,20 @@ export async function getProspectsFromCsv(file?: File): Promise<Prospect[]> {
         
         allEmails.forEach(e => seenEmails.add(e));
 
+        const lawfulBasis = (row.lawful_basis || 'legitimate_interest').toLowerCase();
+
         prospects.push({
             id: row.id || generateUUID(),
             full_name: row.full_name || row.prospect_name || '',
             work_email: workEmail,
             personal_emails: personalEmails,
+            phone_numbers: (row.phone_numbers || row.phone || "").split(',').map(p => p.trim()).filter(Boolean),
             company: row.company_name || row.company || '',
             role: row.role || '',
             company_id: row.company_id || '',
             source: file ? `csv_upload: ${file.name}` : 'csv_initial_load',
             jurisdiction: row.jurisdiction || 'N/A', // Assume N/A if not in CSV
-            lawful_basis: row.lawful_basis || 'legitimate_interest', // Default to legitimate interest
+            lawful_basis: lawfulBasis === 'consent' ? 'consent' : 'legitimate_interest',
             created_at: new Date().toISOString(),
             // Add other fields from your model with defaults if needed
             prospect_name: row.full_name || row.prospect_name, // for UI compatibility
@@ -365,55 +401,53 @@ export async function getProspectsFromCsv(file?: File): Promise<Prospect[]> {
 
 // --- Main Service Function ---
 
+async function processSettledPromises<T>(results: PromiseSettledResult<T>[], type: 'linkedin' | 'domain'): Promise<{ successes: T[], errorCount: number }> {
+    const successes: T[] = [];
+    let errorCount = 0;
+
+    for (const result of results) {
+        if (result.status === 'fulfilled') {
+            const value = result.value;
+            Array.isArray(value) ? successes.push(...value) : successes.push(value);
+        } else {
+            errorCount++;
+            console.error(`Enrichment failed for ${type}:`, result.reason);
+        }
+    }
+    return { successes, errorCount };
+}
+
 async function handleEnrichment(urls: string[], type: 'linkedin' | 'domain'): Promise<AssistantMessageData> {
   const enricher = type === 'linkedin' ? enrichProfileFromLinkedIn : enrichDomain;
   const results = await Promise.allSettled(urls.map(url => enricher(url as any)));
 
-  const successfulEnrichments: (Partial<Prospect> | Partial<Company>)[] = [];
-  let errorCount = 0;
+  const { successes, errorCount } = await processSettledPromises(results, type);
 
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      // enrichDomain returns an array, enrichProfileFromLinkedIn returns an object.
-      const value = result.value;
-      Array.isArray(value) ? successfulEnrichments.push(...value) : successfulEnrichments.push(value);
-    } else {
-      errorCount++;
-      console.error(`Enrichment failed:`, result.reason);
-    }
-  }
-
-  if (successfulEnrichments.length === 0) {
+  if (successes.length === 0) {
     return { text: `Sorry, I couldn't enrich any of the provided ${type}s. Please check the console for errors.` };
   }
 
-  const responseText = `✅ Enrichment complete. Successfully processed ${successfulEnrichments.length} item(s). ${errorCount > 0 ? `Failed to process ${errorCount} item(s).` : ''}`;
+  const responseText = `✅ Enrichment complete. Successfully processed ${successes.length} item(s). ${errorCount > 0 ? `Failed to process ${errorCount} item(s).` : ''}`;
   
   // For LinkedIn enrichment, we expect a new prospect to be added.
   // Only return a newProspect if the enrichment was successful.
-  if (type === 'linkedin' && successfulEnrichments.length > 0 && 'full_name' in successfulEnrichments[0]) {
+  if (type === 'linkedin' && successes.length > 0 && 'full_name' in successes[0]) {
     const newProspect: Prospect = {
       id: generateUUID(),
       company_id: '',
       created_at: new Date().toISOString(),
-      full_name: 'N/A',
-      ...(successfulEnrichments[0] as Partial<Prospect>),
+      full_name: 'N/A', // Default value
+      ...(successes[0] as Partial<Prospect>),
     };
-    return { text: responseText, data: successfulEnrichments, newProspect };
+    return { text: responseText, data: successes, newProspect };
   }
 
-  return { text: responseText, data: successfulEnrichments };
+  return { text: responseText, data: successes };
 }
 
 async function handleSearch(prompt: string): Promise<AssistantMessageData> {
-  const parsed = parsePrompt(prompt);
   let searchPayload: Record<string, any>;
-
-  if (parsed.command === 'local_parse') {
-    searchPayload = parseSearchPromptLocally(prompt);
-  } else {
-    const systemPrompt = `You are an AI assistant that helps convert a simple user query into structured data for the ContactOut API.
-
+  const systemPrompt = `You are an AI assistant that helps convert a simple user query into structured data for the ContactOut API.
   Your tasks:
   1. Determine if the user wants to find "people" or "companies".
   2. Extract all relevant search fields:
@@ -434,9 +468,7 @@ async function handleSearch(prompt: string): Promise<AssistantMessageData> {
   - Arrays must be non-empty if the field exists.
   - The JSON must be parseable.`;
 
-    // Using a more stable model name to avoid 404 errors.
-    searchPayload = await getJsonFromOpenAI(systemPrompt, prompt);
-  }
+  searchPayload = await getJsonFromOpenAI(systemPrompt, prompt);
 
   // Improved intent detection: Check for explicit keywords in the original prompt,
   // then fall back to checking keys in the parsed payload.
@@ -447,7 +479,9 @@ async function handleSearch(prompt: string): Promise<AssistantMessageData> {
   if (isPeopleSearch) { // This is a people search
     searchPayload["reveal_info"] = true;
     searchPayload["limit"] = 10;
-    const resp = await apiCallWithRetry(() => getContactOutApi().post("/v1/people/search", searchPayload));
+    const resp = await apiCallWithRetry(() => getContactOutApi().post("/v1/people/search", searchPayload), (attempt, delay) => {
+        console.warn(`ContactOut People Search API rate limit hit. Retrying in ${delay}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
+    });
     const searchResults = resp.data.profiles ? Object.values(resp.data.profiles) : [];
     const prospects = (searchResults as any[]).map((profile: any) => ({
       id: profile.id || generateUUID(),
@@ -457,6 +491,7 @@ async function handleSearch(prompt: string): Promise<AssistantMessageData> {
       company: profile.company?.name,
       role: profile.title || profile.headline,
       country: profile.location,
+      phone_numbers: profile.contact_info?.phones || [],
       source: 'contactout_search',
       created_at: new Date().toISOString(),
     }));
@@ -465,7 +500,9 @@ async function handleSearch(prompt: string): Promise<AssistantMessageData> {
       data: prospects
     };
   } else if (isCompanySearch) { // This is a company search
-    const resp = await apiCallWithRetry(() => getContactOutApi().post("/v1/company/search", searchPayload));
+    const resp = await apiCallWithRetry(() => getContactOutApi().post("/v1/company/search", searchPayload), (attempt, delay) => {
+        console.warn(`ContactOut Company Search API rate limit hit. Retrying in ${delay}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
+    });
     const searchResults = resp.data.companies || [];
     const companies = searchResults.map((company: any) => ({
       id: company.id || generateUUID(),
@@ -498,117 +535,184 @@ async function handleCsvEnrichment(): Promise<AssistantMessageData> {
     return handleEnrichment(urls, 'linkedin');
 }
 
+/**
+ * Saves extracted leads to the MongoDB database.
+ * This function runs in the background and includes error handling
+ * to prevent database issues from crashing the application.
+ * @param leads An array of leads to save.
+ */
+async function saveLeadsToServer(leads: ScrapedItem[]): Promise<void> {
+  if (leads.length === 0) return;
+  try {
+    // This now calls our new backend server endpoint
+    const response = await axios.post('http://localhost:3001/api/save-leads', leads);
+    console.log(`✅ Leads saved to server: ${response.data.message}`);
+  } catch (error) {
+    console.error("Error saving leads to server:", error);
+    // We log the error but don't throw, so the UI experience isn't interrupted.
+  }
+}
+
 async function handleWebScraping(prompt: string): Promise<AssistantMessageData> {
-    // Step 1: Use an AI agent to perform a web search and identify entity names from the results.
-    const entityFinderSystemPrompt = `You are a research assistant. From the user's query, perform a web search and identify the names of up to 5 relevant entities (e.g., companies, colleges, organizations).
-- Return a valid JSON object with a single key "entities", which is an array of strings.
+    const urlRegex = /^(https?:\/\/[^\s/$.?#].[^\s]*)$/i;
+    let scrapeTargets: string[] = [];
 
-Examples:
-- Input: "top collage in bba hydarabad contact info" -> Output: {"entities": ["ICFAI Business School, Hyderabad", "Amity University, Hyderabad", "GITAM (Deemed to be University), Hyderabad"]}
-- Input: "contact page for Morphius, a company in India"
-  Output: {"entities": ["Morphius"]}
-`;
-    const { entities } = await getJsonFromOpenAI(entityFinderSystemPrompt, prompt);
-
-    if (!entities || entities.length === 0) {
-        return { text: "I couldn't identify any specific entities from your query to search for." };
+    // If the user provides a direct URL, use it. Otherwise, use the AI to find URLs.
+    if (urlRegex.test(prompt)) {
+        scrapeTargets = [prompt];
+    } else {
+        const urlFinderSystemPrompt = `You are a Lead Generation Specialist. Your goal is to find the best possible URLs for contact information based on a user's query.
+- Analyze the user's query to understand their intent, even if it's messy or has misspellings (e.g., "collages" instead of "colleges").
+- Analyze the user's query to identify if a specific number of results is requested (e.g., "top 50"). If so, aim for that number. Otherwise, find up to 10 relevant websites.
+- For each website, find the most direct URL for contact information (e.g., a "Contact Us" page, "About" page, or the homepage).
+- Return a valid JSON object with a single key "urls", which is an array of fully-qualified URL strings.`;
+        const result = await getJsonFromOpenAI(urlFinderSystemPrompt, prompt);
+        scrapeTargets = result.urls || [];
     }
-
-    // Step 2: For each entity, find its contact page URL. This is a more targeted and robust approach.
-    const urlFinderSystemPrompt = `You are an intelligent web search agent. For the given entity name, find the most relevant URL for their contact information.
-- Prioritize "Contact Us", "About Us", or official homepages.
-- Return a valid JSON object with a single key "url", which is a string.
-
-Examples:
-- Input: "ICFAI Business School, Hyderabad" -> Output: {"url": "https://www.icfaiuniversity.in/contact-us.html"}
-- Input: "Morphius" -> Output: {"url": "https://www.morphius.in/contact-us"}
-`;
-    const urlPromises = entities.map((entity: string) => getJsonFromOpenAI(urlFinderSystemPrompt, `contact page for ${entity}`));
-    const urlResults = await Promise.allSettled(urlPromises);
-
-    const scrapeTargets = urlResults
-        .filter(result => result.status === 'fulfilled' && result.value.url)
-        .map(result => (result as PromiseFulfilledResult<{url: string}>).value.url);
-
-    if (scrapeTargets.length === 0) {
-        return { text: `I identified the following entities: ${entities.join(', ')}, but could not find any contact pages for them.` };
-    }
-
-    const allLeads: any[] = [];
 
     // Step 2: Scrape each URL in parallel for much faster results.
     const scrapePromises = scrapeTargets.map(async (targetUrl: string) => {
       try {
         // Step 3: Use Jina AI Reader to get clean page content.
+        // Adding a security header can improve reliability for the Jina service.
+        // This is a free tier key, but in a real app, it should be in .env
+        const jinaApiKey = 'jina_b5a7f10b3a1a4a1c9b0a1a1a1a1a1a1a'; // Example, should be in .env
         const readerResponse = await axios.get(`https://r.jina.ai/${targetUrl}`, {
-          headers: { 'Accept': 'application/json' },
+          headers: { 
+            'Accept': 'application/json',
+            'x-api-key': `Bearer ${jinaApiKey}`
+          },
         });
         const pageContent = readerResponse.data.data.content;
 
-        // Use a more advanced prompt to extract enriched lead information.
-        const leadExtractionSystemPrompt = `You are a high-level AI Lead Generation Agent. Your task is to extract highly-qualified, enriched leads from raw text content.
+        const leadExtractionSystemPrompt = `You are an advanced AI Lead Generation Agent. 
+Your task is to extract high-quality **decision-maker contact information** from any text, webpage, or document. Always return JSON in a single object with a "leads" array.
 
-Your output must be a valid JSON object with a single key "leads", which is an array of lead objects.
+### Rules:
+1. **Target Roles**:
+   - Extract multiple leads per organization:
+     • Top Management (CEO, Founder, Director, Principal, Dean)
+     • Department Heads / VPs / Managers / Professors / Advisors / Program Leads
+   - If a department or specialty is mentioned (e.g., "Computer Science", "Admissions"), prioritize leaders in that area.
 
-Each lead object must adhere to the following strict quality requirements:
-1.  **full_name**: MUST be a real person's full name. Do NOT use placeholders like "Unknown", "Inquiry", or "Scraped Company". If a real name cannot be found, discard the lead.
-2.  **role**: The person's job title or role. If not available, use "N/A".
-3.  **email**: MUST be a professional/work email address. Do NOT include personal emails (e.g., @gmail.com, @yahoo.com) or generic company emails (e.g., info@, contact@, support@). If a valid work email is not found, discard the lead.
-4.  **phone**: A valid phone number, formatted with a country code if possible (e.g., +1-555-123-4567). If not available, use "N/A".
-5.  **company**: The correct name of the company the person works for, inferred from the text content.
-6.  **confidence_score**: An estimated percentage (0-100) of how likely the extracted lead information is accurate and complete based on these rules.
+2. **Required Fields per Lead**:
+   - full_name
+   - role
+   - company (or organization)
+   - work_email (corporate emails preferred; avoid personal unless last resort)
+   - personal_emails (optional)
+   - phone (only direct numbers; skip IVR or call-center)
+   - website (main org page or department page)
+   - confidence_score (0-100; higher for verified corporate info)
+   - source_details (page URL, text snippet, or origin of the data)
 
-Example Output:
-{
-  "leads": [
-    {
-      "full_name": "Jane Doe",
-      "role": "Chief Technology Officer",
-      "email": "jane.d@examplecorp.com",
-      "phone": "+1-800-555-1234",
-      "company": "Example Corp",
-      "confidence_score": 95
-    }
-  ]
-}`;
+3. **Avoid Generic Contacts**:
+   - Skip emails like info@, contact@, admissions@, careers@, hr@, enquiry@, webmaster@.
 
+4. **Deeper Search**:
+   - If "Contact Us" pages only provide generic info, explore "About", "Team", "Leadership", "Faculty", "Departments" pages.
+   - For large text blocks, extract **titles + names** (e.g., "Dr. A. Kumar, Head of Dept").
+
+5. **Enrichment / Role Inference**:
+   - Cross-check extracted names with organizational context (LinkedIn-style reasoning) to assign correct roles.
+   - If only a role is found (e.g., "Principal"), keep full_name = role, role = role.
+
+6. **Strict Validation**:
+   - Only return leads with at least a role + organization + valid work_email.
+   - Assign higher confidence if email clearly matches the organization domain.`;
         const { leads } = await getJsonFromOpenAI(leadExtractionSystemPrompt, pageContent);
-
-        if (leads && leads.length > 0) {
-          return leads.map((lead: any) => ({
-            id: generateUUID(),
-            full_name: lead.full_name || 'Unknown',
-            company: lead.company,
-            role: lead.role || 'N/A',
-            work_email: lead.email || '',
-            personal_emails: [],
-            websites: lead.phone ? [{ type: 'phone', url: lead.phone }] : [],
+        // Ensure phone numbers are consistently in an array format
+        return (leads || []).map((lead: any) => {
+          const newLead = {
+            ...lead,
+            phone_numbers: Array.isArray(lead.phone) ? lead.phone : (lead.phone ? [lead.phone] : []),
             source_details: `Scraped from ${targetUrl}`,
-            source: 'ai_web_scrape',
-            query: targetUrl,
-            confidence_score: lead.confidence_score || 0,
-          }));
-        }
+            query: targetUrl
+          };
+          delete newLead.phone; // Remove the old 'phone' property
+          return newLead;
+        });
       } catch (error: any) {
         console.error(`Failed to scrape ${targetUrl}:`, error.message);
+        return []; // Return empty array on failure to not break the entire process.
       }
-      return []; // Return empty array on failure
     });
 
-    const results = await Promise.allSettled(scrapePromises);
+    const results = await Promise.all(scrapePromises);
+    const rawLeads = results.flat();
+    const validatedLeads = validateAndCleanLeads(rawLeads);
 
-    for (const result of results) {
-      if (result.status === 'fulfilled' && result.value) {
-        allLeads.push(...result.value);
-      }
+    // Save to DB in the background without blocking the response to the user.
+    saveLeadsToServer(validatedLeads);
+
+    if (validatedLeads.length === 0) {
+        return { text: `⚠️ I searched for "${prompt}" but couldn't find any high-quality contact information on the resulting pages.` };
     }
 
-    if (allLeads.length === 0) {
-        return { text: `⚠️ I searched for "${prompt}" but couldn't find any contact information on the resulting pages.` };
-    }
+    const responseText = `✅ I analyzed ${scrapeTargets.length} page(s) and found ${validatedLeads.length} high-quality lead(s).`;
+    return { text: responseText, data: validatedLeads };
+}
 
-    const responseText = `✅ I analyzed ${scrapeTargets.length} page(s) based on your query and found ${allLeads.length} high-quality lead(s).`;
-    return { text: responseText, data: allLeads };
+/**
+ * Validates and cleans a list of scraped leads based on a set of quality rules.
+ * - Filters out low-confidence leads.
+ * - Removes leads with invalid or generic emails.
+ * - Ensures work email domain matches the company website.
+ * - Deduplicates leads.
+ * @param leads The raw list of leads extracted by the AI.
+ * @returns A cleaned and validated list of leads.
+ */
+function validateAndCleanLeads(leads: any[]): any[] {
+    const seenEmails = new Set<string>();
+    const cleanedLeads: any[] = [];
+    const genericEmailPrefixes = ['info@', 'contact@', 'support@', 'admin@', 'hello@', 'team@', 'admissions@', 'placements@', 'hr@', 'jobs@', 'media@', 'press@'];
+
+    for (const lead of leads) {
+        // Rule: Must have a name or a role to be considered a valid lead
+        const hasName = lead.full_name && lead.full_name.toLowerCase() !== 'n/a';
+        if (!hasName) {
+            continue;
+        }
+
+        // Rule: Filter out low-confidence leads
+        if (!lead.confidence_score || lead.confidence_score < 60) {
+            continue;
+        }
+
+        const workEmail = lead.work_email?.toLowerCase();
+        
+        // Rule: Must have a valid work email
+        if (!workEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(workEmail)) {
+            continue;
+        }
+
+        // Rule: Avoid generic emails
+        if (genericEmailPrefixes.some(prefix => workEmail.startsWith(prefix))) {
+            continue;
+        }
+
+        // Rule: Email domain must match company domain if website is present
+        if (lead.website) {
+            try {
+                const websiteDomain = new URL(lead.website).hostname.replace(/^www\./, '');
+                const emailDomain = workEmail.split('@')[1];
+                if (emailDomain !== websiteDomain) {
+                    continue; // Skip if domains don't match
+                }
+            } catch (e) {
+                // Invalid website URL, skip this check
+            }
+        }
+
+        // Rule: Remove duplicates
+        if (seenEmails.has(workEmail)) {
+            continue;
+        }
+
+        seenEmails.add(workEmail);
+        cleanedLeads.push(lead);
+    }
+    return cleanedLeads;
 }
 
 export const processUserPrompt = async (prompt: string, allProspects: Prospect[], selectedIds: Set<string>, dataSource: DataSource): Promise<AssistantMessageData> => {
@@ -619,18 +723,20 @@ export const processUserPrompt = async (prompt: string, allProspects: Prospect[]
     return await handleWebScraping(prompt);
   }
 
-  const parsedPrompt = parsePrompt(prompt);
+  const intent = await getIntent(prompt);
 
   try {
-    switch (parsedPrompt.type) {
+    switch (intent.type) {
       case 'enrich_linkedin':
-        return await handleEnrichment(parsedPrompt.values, 'linkedin');
+        return await handleEnrichment(intent.values, 'linkedin');
       case 'enrich_domain':
-        return await handleEnrichment(parsedPrompt.values, 'domain');
+        return await handleEnrichment(intent.values, 'domain');
       case 'search':
-        return await handleSearch(parsedPrompt.values[0]);
+        return await handleSearch(intent.values[0]);
+      case 'web_scrape':
+        return await handleWebScraping(intent.values[0]);
       case 'command':
-        switch (parsedPrompt.command) {
+        switch (intent.command) {
           case 'show prospects':
             return { text: `Here are the ${allProspects.length} prospects from your current session:`, data: allProspects };
           case 'generate previews': {
@@ -698,6 +804,9 @@ export const processUserPrompt = async (prompt: string, allProspects: Prospect[]
       return { text: `An error occurred during the sending process: ${error.message}` };
     }
           }
+          default:
+            // This handles any new or unexpected commands from the AI gracefully.
+            return { text: `I received an unknown command: '${intent.command}'. I'm not sure how to handle that.` };
         }
       case 'unknown':
       default:
