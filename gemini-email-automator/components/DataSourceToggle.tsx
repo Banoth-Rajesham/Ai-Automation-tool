@@ -1,7 +1,6 @@
 import React from 'react';
+import { type DataSource } from '../types';
 import './DataSourceToggle.css';
-
-type DataSource = 'contactout' | 'webscraping';
 
 interface DataSourceToggleProps {
   dataSource: DataSource;
@@ -11,28 +10,27 @@ interface DataSourceToggleProps {
 export const DataSourceToggle: React.FC<DataSourceToggleProps> = ({ dataSource, setDataSource }) => {
   const isWebScraping = dataSource === 'webscraping';
 
-  const toggleDataSource = () => {
+  const handleToggle = () => {
     setDataSource(isWebScraping ? 'contactout' : 'webscraping');
   };
 
   return (
-    <div className="p-2 bg-slate-100 dark:bg-slate-700/50 rounded-lg flex flex-col items-center">
-      <label htmlFor="dataSourceCheckbox" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-        Data Source
+    <div className="dataSourceContainer">
+      <input
+        type="checkbox"
+        id="dataSourceCheckbox"
+        checked={isWebScraping}
+        onChange={handleToggle}
+      />
+      <label htmlFor="dataSourceCheckbox" className="dataSourceLabel">
       </label>
-      <div className="dataSourceContainer">
-        <input 
-          type="checkbox" 
-          name="checkbox" 
-          id="dataSourceCheckbox" 
-          checked={isWebScraping}
-          onChange={toggleDataSource}
-        />
-        <label htmlFor="dataSourceCheckbox" className="dataSourceLabel"></label>
-        <div className="flex justify-between w-full text-xs px-1 mt-1">
-            <span className={`dataSourceText ${!isWebScraping ? 'active' : 'text-slate-500 dark:text-slate-400'}`} onClick={() => setDataSource('contactout')}>ContactOut</span>
-            <span className={`dataSourceText ${isWebScraping ? 'active' : 'text-slate-500 dark:text-slate-400'}`} onClick={() => setDataSource('webscraping')}>Web Scraping</span>
-        </div>
+      <div className="flex justify-between mt-2 text-xs w-full px-2">
+        <span className={`dataSourceText ${!isWebScraping ? 'active' : 'text-slate-500'}`}>
+          ContactOut
+        </span>
+        <span className={`dataSourceText ${isWebScraping ? 'active' : 'text-slate-500'}`}>
+          Web Scraper
+        </span>
       </div>
     </div>
   );

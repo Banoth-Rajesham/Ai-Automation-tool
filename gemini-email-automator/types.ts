@@ -90,9 +90,20 @@ export interface AssistantMessageData {
   newProspect?: Prospect;
   requiresManualEntry?: boolean;
   sourceUrl?: string;
+  previews?: EmailPreview[];
+  intent?: { type: string; values: string[]; command?: string };
 }
 
-export type ViewType = 'dashboard' | 'prospects' | 'previews' | 'send' | 'replies' | 'scraped' | 'scraper_input' | 'database';
+export interface EmailPreview {
+  prospect_name: string;
+  email?: string;
+  subject: string;
+  body: string;
+  prospectId?: string; // Add prospectId for tracking
+  warning?: string;
+}
+
+export type ViewType = 'dashboard' | 'prospects' | 'previews' | 'send' | 'replies' | 'scraped' | 'scraper_input' | 'database' | 'previews_display';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -104,7 +115,6 @@ export interface ChatMessage {
 export type DataSource = 'contactout' | 'webscraping';
 
 export interface ScrapedItem {
-  _id?: string; // MongoDB adds an _id field
   id: string;
   full_name: string;
   company: string;

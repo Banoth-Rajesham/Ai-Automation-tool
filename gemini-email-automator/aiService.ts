@@ -1,8 +1,7 @@
-
 import OpenAI from "openai";
 import axios from 'axios';
 import Papa from 'papaparse';
-import { type AssistantMessageData, type Prospect, type CampaignMetrics, type RecentActivity, type Company, type DataSource, ScrapedItem } from './types';
+import { type AssistantMessageData, type Prospect, type CampaignMetrics, type RecentActivity, type Company, type DataSource, ScrapedItem, EmailPreview } from './types';
 import { type Campaign } from './types';
 
 let openai: OpenAI;
@@ -264,16 +263,16 @@ function parseSearchPromptLocally(prompt: string): Record<string, any> {
  * This is more robust than simple regex or keyword matching.
  */
 async function getIntent(prompt: string): Promise<{ type: 'enrich_linkedin' | 'enrich_domain' | 'search' | 'web_scrape' | 'command' | 'unknown'; values: string[]; command?: string }> {
-    const systemPrompt = `You are an AI assistant that classifies user intent. Analyze the user's prompt and determine the primary action and any associated values.
+    const systemPrompt = `You are an AI assistant that classifies user intent. Analyze the user's prompt and determine the primary action, values, and optionally a command and count.
 
-Your response must be a JSON object with "type", "values", and optionally a "command".
+Your response must be a JSON object with "type", "values", and optionally "command" and "count".
 
 Possible types are:
 - "enrich_linkedin": User provides one or more LinkedIn profile URLs. Extract all URLs into the "values" array.
 - "enrich_domain": User provides one or more company domain names. Extract all domains into the "values" array.
 - "search": User wants to find people or companies using keywords. The full prompt goes into the "values" array.
 - "web_scrape": User provides a direct URL to scrape or a general query to find and scrape websites. The URL or query goes into the "values" array.
-- "command": User gives a direct command. The command name (e.g., "show prospects") goes into the "command" field.
+- "command": User gives a direct command. The command name (e.g., "show prospects") goes into the "command" field. If a number is specified (e.g., "send 50 emails"), extract it into the "count" field.
 - "unknown": If the intent is unclear.
 
 Rules:
@@ -288,7 +287,7 @@ Examples:
 - "find people with title:\"product manager\" company:\"google\"" -> {"type": "search", "values": ["find people with title:\"product manager\" company:\"google\""]}
 - "top 10 civil engineering colleges in hyderabad" -> {"type": "web_scrape", "values": ["top 10 civil engineering colleges in hyderabad"]}
 - "https://www.tesla.com/contact" -> {"type": "web_scrape", "values": ["https://www.tesla.com/contact"]}
-- "generate previews" -> {"type": "command", "command": "generate previews", "values": []}
+- "send 50 emails" -> {"type": "command", "command": "send emails", "values": [], "count": 50}
 `;
 
     // Use a simpler regex-based pre-classification for very obvious cases to save API calls.
@@ -313,6 +312,7 @@ function classifySector(email?: string, companyName?: string): string {
         "Health": ['health', 'medical', '.med', 'clinic', 'hospital'],
         "Finance": ['finance', 'bank', 'invest', '.fi', 'capital', 'wealth'],
         "Technology": ['.io', '.ai', '.tech', 'software', 'cloud', 'solutions'],
+        "Psychology": ['psychology', 'therapy', 'counseling'],
         "Retail": ['retail', 'shop', 'store', 'commerce', 'fashion', 'trade'],
     };
 
@@ -336,10 +336,24 @@ function getFallbackEmail(prospect: Prospect, senderName: string = "G. Gowthami"
 
 // --- Gemini API Functions ---
 
-async function generateEmailForProspect(prospect: Prospect, _campaign?: Partial<Campaign>): Promise<{ email_subject: string; email_body: string; compliance_warning?: string; }> {
-  // This function is now a simple fallback as the LLM for email generation was removed.
-  // To re-enable AI-powered emails, this would need to be updated to call the Gemini client.
-  return getFallbackEmail(prospect, "G. Gowthami");
+/**
+ * Verifies the structure and content of an AI-generated email.
+ * @param email The generated email object.
+ * @returns True if the email is valid, false otherwise.
+ */
+function verifyGeneratedEmail(email: { email_subject: string; email_body: string }): boolean {
+  if (!email.email_subject || email.email_subject.length > 70) {
+    return false;
+  }
+  if (!email.email_body || email.email_body.split('\n').length < 2) {
+    return false;
+  }
+  // Simple heuristic to check for spammy phrases
+  const spammyPhrases = ['free trial', 'limited time offer', 'act now'];
+  if (spammyPhrases.some(phrase => email.email_body.toLowerCase().includes(phrase))) {
+    return false;
+  }
+  return true;
 }
 
 // --- Helper Functions ---
@@ -392,7 +406,7 @@ export async function getProspectsFromCsv(file?: File): Promise<Prospect[]> {
             lawful_basis: lawfulBasis === 'consent' ? 'consent' : 'legitimate_interest',
             created_at: new Date().toISOString(),
             // Add other fields from your model with defaults if needed
-            prospect_name: row.full_name || row.prospect_name, // for UI compatibility
+            prospect_name: row.full_name || row.prospect_name,
             email: workEmail, // for UI compatibility
         });
     }
@@ -541,11 +555,16 @@ async function handleCsvEnrichment(): Promise<AssistantMessageData> {
  * to prevent database issues from crashing the application.
  * @param leads An array of leads to save.
  */
-async function saveLeadsToServer(leads: ScrapedItem[]): Promise<void> {
-  if (leads.length === 0) return;
+async function saveLeadsToServer(data: ScrapedItem | ScrapedItem[]): Promise<void> {
+  const leadsToSave = Array.isArray(data) ? data : [data];
+  if (leadsToSave.length === 0) return;
+
+  // Ensure every item has a unique ID before saving
+  const payload = leadsToSave.map(lead => ({ ...lead, id: lead.id || generateUUID() }));
+
   try {
     // This now calls our new backend server endpoint
-    const response = await axios.post('http://localhost:3001/api/save-leads', leads);
+    const response = await axios.post('/api/save-leads', payload);
     console.log(`✅ Leads saved to server: ${response.data.message}`);
   } catch (error) {
     console.error("Error saving leads to server:", error);
@@ -554,68 +573,86 @@ async function saveLeadsToServer(leads: ScrapedItem[]): Promise<void> {
 }
 
 async function handleWebScraping(prompt: string): Promise<AssistantMessageData> {
+    const jinaApiKey = import.meta.env.VITE_JINA_API_KEY as string;
+    if (!jinaApiKey) {
+        return { text: "⚠️ Web scraping is disabled. Please set the `VITE_JINA_API_KEY` in your `.env.local` file." };
+    }
+
     const urlRegex = /^(https?:\/\/[^\s/$.?#].[^\s]*)$/i;
     let scrapeTargets: string[] = [];
 
-    // If the user provides a direct URL, use it. Otherwise, use the AI to find URLs.
     if (urlRegex.test(prompt)) {
         scrapeTargets = [prompt];
     } else {
-        const urlFinderSystemPrompt = `You are a Lead Generation Specialist. Your goal is to find the best possible URLs for contact information based on a user's query.
-- Analyze the user's query to understand their intent, even if it's messy or has misspellings (e.g., "collages" instead of "colleges").
-- Analyze the user's query to identify if a specific number of results is requested (e.g., "top 50"). If so, aim for that number. Otherwise, find up to 10 relevant websites.
-- For each website, find the most direct URL for contact information (e.g., a "Contact Us" page, "About" page, or the homepage).
-- Return a valid JSON object with a single key "urls", which is an array of fully-qualified URL strings.`;
-        const result = await getJsonFromOpenAI(urlFinderSystemPrompt, prompt);
-        scrapeTargets = result.urls || [];
+        // Step 1: Find initial search results (e.g., blog posts, ranking sites)
+        const initialSearchPrompt = `You are a web search expert. Find up to 5 relevant URLs for the user's query. The URLs can be for articles, lists, or homepages. Return a JSON object with a "urls" array.
+Query: "${prompt}"`;
+        const initialResult = await getJsonFromOpenAI(initialSearchPrompt, prompt);
+        const initialUrls = initialResult.urls || [];
+
+        if (initialUrls.length === 0) {
+            return { text: `I couldn't find any initial web pages for your query: "${prompt}".` };
+        }
+
+        // Step 2: Scrape initial URLs to find the *actual* target domains/contact pages.
+        const deepDiveFinderPrompt = `You are a data extractor. From the following text, extract the official website URLs for the organizations mentioned. Also, find any direct links to "Contact Us", "About Us", "Faculty", or "Directory" pages.
+Return a valid JSON object with a single key "urls", which is an array of unique, fully-qualified URL strings. Prioritize contact/faculty pages over homepages.
+
+Example:
+Input: "1. ISB Hyderabad (isb.edu). Contact them at isb.edu/contact. 2. IIM Vizag (iimv.ac.in)..."
+Output: {"urls": ["https://www.isb.edu/contact", "https://www.iimv.ac.in"]}`;
+
+        const deepDivePromises = initialUrls.map(async (url: string) => {
+            const readerResponse = await axios.get(`https://r.jina.ai/${url}`, { headers: { 'Accept': 'application/json', 'x-api-key': `Bearer ${jinaApiKey}` } });
+            const pageContent = readerResponse.data.data.content;
+            return getJsonFromOpenAI(deepDiveFinderPrompt, pageContent);
+        });
+
+        const deepDiveResults = await Promise.allSettled(deepDivePromises);
+        const finalUrls = deepDiveResults.flatMap(res => res.status === 'fulfilled' ? res.value.urls : []).filter(Boolean);
+        scrapeTargets = [...new Set(finalUrls)]; // Deduplicate URLs
     }
 
-    // Step 2: Scrape each URL in parallel for much faster results.
+    if (scrapeTargets.length === 0) {
+        return { text: `⚠️ I analyzed the initial search results but couldn't find any specific company or university websites to scrape.` };
+    }
+
+    // Step 3: Scrape each final target URL in parallel for much faster results.
     const scrapePromises = scrapeTargets.map(async (targetUrl: string) => {
       try {
-        // Step 3: Use Jina AI Reader to get clean page content.
-        // Adding a security header can improve reliability for the Jina service.
-        // This is a free tier key, but in a real app, it should be in .env
-        const jinaApiKey = 'jina_b5a7f10b3a1a4a1c9b0a1a1a1a1a1a1a'; // Example, should be in .env
         const readerResponse = await axios.get(`https://r.jina.ai/${targetUrl}`, {
           headers: { 
             'Accept': 'application/json',
-            'x-api-key': `Bearer ${jinaApiKey}`
+            ...(jinaApiKey && { 'x-api-key': `Bearer ${jinaApiKey}` })
           },
         });
         const pageContent = readerResponse.data.data.content;
 
-        const leadExtractionSystemPrompt = `You are an advanced AI Lead Generation Agent. 
-Your task is to extract high-quality **decision-maker contact information** from any text, webpage, or document. Always return JSON in a single object with a "leads" array.
+        const leadExtractionSystemPrompt = `You are an advanced AI Lead Generation Agent. Your task is to extract high-quality contact information from any text. Always return JSON in a single object with a "leads" array.
 
 ### Rules:
-1. **Target Roles**:
-   - Extract multiple leads per organization:
-     • Top Management (CEO, Founder, Director, Principal, Dean)
-     • Department Heads / VPs / Managers / Professors / Advisors / Program Leads
-   - If a department or specialty is mentioned (e.g., "Computer Science", "Admissions"), prioritize leaders in that area.
+1. **Target Roles**: Extract multiple leads per organization.
+   - For **Companies**: CEO, Founder, Director, VP, Manager.
+   - For **Colleges/Universities**: Principal, Dean, Director, Head of Department (HOD), Professor, Admissions Head.
+   - If a department is mentioned (e.g., "MBA", "Psychology"), prioritize leaders in that area.
 
 2. **Required Fields per Lead**:
-   - full_name
-   - role
-   - company (or organization)
-   - work_email (corporate emails preferred; avoid personal unless last resort)
-   - personal_emails (optional)
-   - phone (only direct numbers; skip IVR or call-center)
-   - website (main org page or department page)
-   - confidence_score (0-100; higher for verified corporate info)
-   - source_details (page URL, text snippet, or origin of the data)
+   - **full_name**: The person's full name.
+   - **role**: Their job title or position.
+   - **company**: The organization's name.
+   - **work_email**: Must be a valid, non-generic email.
+   - **phone**: Direct numbers only. Skip general/IVR numbers.
 
 3. **Avoid Generic Contacts**:
-   - Skip emails like info@, contact@, admissions@, careers@, hr@, enquiry@, webmaster@.
+   - **IGNORE** emails like info@, contact@, admissions@, careers@, hr@, enquiry@, webmaster@.
 
-4. **Deeper Search**:
-   - If "Contact Us" pages only provide generic info, explore "About", "Team", "Leadership", "Faculty", "Departments" pages.
-   - For large text blocks, extract **titles + names** (e.g., "Dr. A. Kumar, Head of Dept").
+4. **Data Assembly**:
+   - Information might be scattered. Combine a name from one line with an email/phone from another if they are in the same block of text (e.g., a staff directory entry).
+   - Extract **titles + names** (e.g., "Dr. A. Kumar, Head of Dept").
 
-5. **Enrichment / Role Inference**:
-   - Cross-check extracted names with organizational context (LinkedIn-style reasoning) to assign correct roles.
-   - If only a role is found (e.g., "Principal"), keep full_name = role, role = role.
+5. **Role Inference**:
+   - If only a role is found without a name (e.g., "Principal"), set \`full_name\` to be the same as the \`role\`.
+   - Assign a confidence_score (0-100) based on how complete and verifiable the information is.
 
 6. **Strict Validation**:
    - Only return leads with at least a role + organization + valid work_email.
@@ -640,7 +677,16 @@ Your task is to extract high-quality **decision-maker contact information** from
 
     const results = await Promise.all(scrapePromises);
     const rawLeads = results.flat();
-    const validatedLeads = validateAndCleanLeads(rawLeads);
+    const cleanedLeads = validateAndCleanLeads(rawLeads);
+
+    // Convert cleaned leads into full Prospect objects
+    const validatedLeads: Prospect[] = cleanedLeads.map((lead: any) => ({
+      ...lead,
+      id: generateUUID(),
+      created_at: new Date().toISOString(),
+      source: 'web_scraping',
+      email: lead.work_email, // for UI compatibility
+    }));
 
     // Save to DB in the background without blocking the response to the user.
     saveLeadsToServer(validatedLeads);
@@ -669,13 +715,14 @@ function validateAndCleanLeads(leads: any[]): any[] {
 
     for (const lead of leads) {
         // Rule: Must have a name or a role to be considered a valid lead
-        const hasName = lead.full_name && lead.full_name.toLowerCase() !== 'n/a';
-        if (!hasName) {
+        const hasName = lead.full_name && lead.full_name.toLowerCase() !== 'n/a' && lead.full_name.toLowerCase() !== lead.role?.toLowerCase();
+        const hasRole = lead.role && lead.role.toLowerCase() !== 'n/a';
+        if (!hasName && !hasRole) {
             continue;
         }
 
         // Rule: Filter out low-confidence leads
-        if (!lead.confidence_score || lead.confidence_score < 60) {
+        if (lead.confidence_score && lead.confidence_score < 10) {
             continue;
         }
 
@@ -691,19 +738,6 @@ function validateAndCleanLeads(leads: any[]): any[] {
             continue;
         }
 
-        // Rule: Email domain must match company domain if website is present
-        if (lead.website) {
-            try {
-                const websiteDomain = new URL(lead.website).hostname.replace(/^www\./, '');
-                const emailDomain = workEmail.split('@')[1];
-                if (emailDomain !== websiteDomain) {
-                    continue; // Skip if domains don't match
-                }
-            } catch (e) {
-                // Invalid website URL, skip this check
-            }
-        }
-
         // Rule: Remove duplicates
         if (seenEmails.has(workEmail)) {
             continue;
@@ -715,7 +749,42 @@ function validateAndCleanLeads(leads: any[]): any[] {
     return cleanedLeads;
 }
 
-export const processUserPrompt = async (prompt: string, allProspects: Prospect[], selectedIds: Set<string>, dataSource: DataSource): Promise<AssistantMessageData> => {
+/**
+ * Processes an array of items in sequential batches to avoid overwhelming APIs.
+ * @param items The array of items to process.
+ * @param batchSize The number of items to process in each batch.
+ * @param processItem A function that takes an item and returns a promise for the result.
+ * @param onProgress An optional callback to report progress.
+ * @returns A promise that resolves with an array of all results.
+ */
+async function processInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  processBatch: (batch: T[]) => Promise<R[]>,
+  onProgress?: (processed: number, total: number) => void
+): Promise<R[]> {
+  const allResults: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batchItems = items.slice(i, i + batchSize);
+    
+    try {
+      // The processing function now receives the entire batch
+      const batchResults = await processBatch(batchItems);
+      allResults.push(...batchResults);
+      onProgress?.(Math.min(i + batchSize, items.length), items.length);
+    } catch (error) {
+      console.error(`Error processing batch starting at index ${i}:`, error);
+      // Stop on error to prevent further issues.
+      throw new Error(`Failed to process a batch of items. See console for details.`);
+    }
+  }
+  return allResults;
+}
+
+// Cache for generated email content to reuse between preview and send
+let emailContentCache: Map<string, any> | null = null;
+
+export const processUserPrompt = async (prompt: string, allProspects: Prospect[], selectedIds: Set<string>, dataSource: DataSource, onProgress?: (processed: number, total: number) => void, postAssistantMessage?: (content: string, data?: any) => void): Promise<AssistantMessageData> => {
   const lowerCasePrompt = prompt.toLowerCase();
 
   // If web scraping is active, all text input is treated as a scrape target.
@@ -724,6 +793,11 @@ export const processUserPrompt = async (prompt: string, allProspects: Prospect[]
   }
 
   const intent = await getIntent(prompt);
+
+  // Clear the cache if the user is not sending emails immediately after previewing.
+  if (intent.command !== 'send emails') {
+    emailContentCache = null;
+  }
 
   try {
     switch (intent.type) {
@@ -739,71 +813,96 @@ export const processUserPrompt = async (prompt: string, allProspects: Prospect[]
         switch (intent.command) {
           case 'show prospects':
             return { text: `Here are the ${allProspects.length} prospects from your current session:`, data: allProspects };
-          case 'generate previews': {
-    try {
-      const prospectsToPreview = selectedIds.size > 0 
-        ? allProspects.filter(p => p.id && selectedIds.has(p.id))
-        : allProspects.slice(0, 3);
-      const previews = await Promise.all(
-          prospectsToPreview.map(async (prospect) => {
-              const emailContent = await generateEmailForProspect(prospect);
-              return {
-                  prospect_name: prospect.full_name,
-                  email: prospect.work_email,
-                  subject: emailContent.email_subject,
-                  body: emailContent.email_body.substring(0, 150) + '...',
-                  warning: emailContent.compliance_warning,
-              };
-          })
-      );
-      return { text: `✅ Generated ${previews.length} email previews.`, data: previews };
-    } catch (error: any) {
-      console.error("Error generating previews:", error);
-      return { text: `An error occurred while generating previews: ${error.message}` };
-    }
-          }
-          case 'enrich prospects from csv':
-            return await handleCsvEnrichment();
-          case 'check replies':
-    return {
-      text: "✅ Reply check simulation complete. Here's the latest campaign overview:",
-      metrics: simulateCheckReplies(),
-    };
+          case 'generate previews':
           case 'send emails': {
-    try {
-      // Define a mock campaign with throttling rules to simulate rate limiting.
-      const mockCampaign: Partial<Campaign> = {
-        throttles: { daily_cap: 50 }
-      };
+            try {
+              const isSending = intent.command === 'send emails';
+              const actionName = isSending ? 'sending' : 'previewing';
 
-      const prospectsToSend = (selectedIds.size > 0
-        ? allProspects.filter(p => p.id && selectedIds.has(p.id))
-        : allProspects).filter(p => p.work_email);
+              // Determine the base list of prospects
+              const baseProspects = selectedIds.size > 0
+                ? allProspects.filter(p => p.id && selectedIds.has(p.id))
+                : allProspects;
+              
+              // Filter for prospects with a valid email
+              let prospectsToProcess = baseProspects.filter(p => p.work_email);
 
-      if (prospectsToSend.length === 0) {
-        return { text: "No prospects selected or found with valid emails to send to." };
-      }
+              // If a count was specified in the prompt, slice the array
+              if (intent.count && intent.count > 0) {
+                prospectsToProcess = prospectsToProcess.slice(0, intent.count);
+              }
 
-      const dailyCap = mockCampaign.throttles?.daily_cap || prospectsToSend.length;
-      let responseText = `✅ Simulation complete. Processed ${prospectsToSend.length} emails.`;
+              if (prospectsToProcess.length === 0) {
+                return { text: `No prospects with valid emails found to ${isSending ? 'send' : 'preview'}.` };
+              }
 
-      if (prospectsToSend.length > dailyCap) {
-        const days = Math.ceil(prospectsToSend.length / dailyCap);
-        responseText = `✅ Simulation complete. ${prospectsToSend.length} emails have been scheduled. Based on the daily cap of ${dailyCap}, they will be sent over ${days} days.`;
-      }
+              if (isSending) {
+                // --- Logic for Sending Emails (Foreground Task) ---
+                let emailContentMap: Map<string, any>;
 
-      // Simulate sending by generating email content for each prospect
-      const sentEmailsLog = await Promise.all(prospectsToSend.map(async (prospect) => {
-        const emailContent = await generateEmailForProspect(prospect);
-        return { "status": "✅ Sent", "to": prospect.work_email, "subject": emailContent.email_subject };
-      }));
+                if (emailContentCache) {
+                  emailContentMap = emailContentCache;
+                  emailContentCache = null; // Clear cache after use
+                } else {
+                  // Fallback: generate content if cache is empty (e.g., direct "send" command)
+                  const systemPrompt = getBulkGenerationPrompt();
+                  const generatedContents = await processInBatches(prospectsToProcess, 10, async (batch) => {
+                    const userPrompt = JSON.stringify(batch.map(p => ({ id: p.id, role: p.role, company: p.company, sector: classifySector(p.work_email, p.company) })));
+                    const result = await getJsonFromOpenAI(systemPrompt, userPrompt);
+                    return result.emails || [];
+                  }, onProgress);
+                  emailContentMap = new Map(generatedContents.flat().map((content: any) => [content.id, content]));
+                }
 
-      return { text: responseText, data: sentEmailsLog };
-    } catch (error: any) {
-      console.error("Error during email sending simulation:", error);
-      return { text: `An error occurred during the sending process: ${error.message}` };
-    }
+                const sendEmail = async (prospect: Prospect) => {
+                  const content = emailContentMap.get(prospect.id);
+                  if (!content) throw new Error(`No AI content for ${prospect.full_name}`);
+                  const emailHtml = generateHtmlBody(prospect, content.intro, content.bullet_points, content.closing, false);
+                  await axios.post('/api/send-email', {
+                    to: prospect.work_email,
+                    subject: 'Unlock Your Data Potential at MORPHIUS AI',
+                    body: emailHtml,
+                    prospectId: prospect.id // Pass prospectId for tracking links
+                  });
+                  return { status: "✅ Sent", to: prospect.work_email, subject: `Email for ${prospect.full_name}` };
+                };
+
+                const sentEmailsLog = await processInBatches(prospectsToProcess, 10, (batch) => Promise.all(batch.map(sendEmail)), onProgress);
+                return { text: `✅ Campaign complete. Processed ${sentEmailsLog.length} emails.`, data: sentEmailsLog.flat() };
+
+              } else {
+                // --- Logic for Generating Previews ---
+                const systemPrompt = getBulkGenerationPrompt();
+                const generatedContents = await processInBatches(prospectsToProcess, 10, async (batch) => {
+                    const userPrompt = JSON.stringify(batch.map(p => ({ id: p.id, role: p.role, company: p.company, sector: classifySector(p.work_email, p.company) })));
+                    const result = await getJsonFromOpenAI(systemPrompt, userPrompt);
+                    return result.emails || [];
+                }, onProgress);
+                emailContentCache = new Map(generatedContents.flat().map((content: any) => [content.id, content]));
+                const emailContentMap = emailContentCache;
+
+                const previews: EmailPreview[] = prospectsToProcess.map(prospect => {
+                    const content = emailContentMap.get(prospect.id);
+                    // If content exists for this prospect, generate the full body. Otherwise, use a fallback.
+                    const emailHtml = content
+                        ? generateHtmlBody(prospect, content.intro, content.bullet_points, content.closing, true)
+                        : generateHtmlBody(prospect, null, null, null, true); // Fallback case
+
+                    return { prospect_name: prospect.full_name || 'N/A', email: prospect.work_email, subject: 'Unlock Your Data Potential at MORPHIUS AI', body: emailHtml, warning: content ? undefined : "AI content generation failed for this prospect." };
+                });
+
+                return { text: `✅ Generated ${previews.length} email previews.`, previews: previews };
+              }
+            } catch (error: any) {
+              console.error(`Error during '${intent.command}':`, error);
+              return { text: `An error occurred: ${error.message}` };
+            }
           }
+          case 'check replies':
+            return {
+              text: "✅ Reply check simulation complete. Here's the latest campaign overview:",
+              metrics: simulateCheckReplies(),
+            };
           default:
             // This handles any new or unexpected commands from the AI gracefully.
             return { text: `I received an unknown command: '${intent.command}'. I'm not sure how to handle that.` };
@@ -825,3 +924,69 @@ export const processUserPrompt = async (prompt: string, allProspects: Prospect[]
     return { text: friendlyMessage };
   }
 };
+
+function getBulkGenerationPrompt(): string {
+  return `You are an expert email copywriter for MORPHIUS AI. Your task is to write a personalized outreach email for multiple prospects.
+### Company: MORPHIUS AI
+- **Core Services**: AI-powered automation, workflow optimization, predictive analytics, custom AI solutions, ML & NLP models.
+- **Key Selling Point**: We've helped clients in 20+ industries improve efficiency, reduce costs, and increase ROI.
+### Your Task:
+For each prospect in the input, generate a JSON object with:
+1.  "id": The prospect's ID.
+2.  "intro": A personalized opening paragraph connecting MORPHIUS AI to the prospect's role and industry.
+3.  "bullet_points": An array of 2-3 short bullet points highlighting specific, relevant benefits.
+4.  "closing": A closing paragraph with a clear call to action for a 15-minute call.
+
+Return a single JSON object with an "emails" key, which is an array of these individual prospect JSON objects.
+`;
+}
+
+function generateHtmlBody(prospect: Prospect, intro: string | null, bullet_points: string[] | null, closing: string | null, preview: boolean): string {
+  const emailSubject = `Unlock Your Data Potential at MORPHIUS AI`;
+  const recipientName = prospect.full_name || 'there';
+
+  const bulletsHtml = (bullet_points && bullet_points.length > 0)
+    ? `<ul style="padding-left: 20px; margin: 12px 0;">${bullet_points.map(item => `<li style="margin-bottom: 8px;">${item}</li>`).join('')}</ul>`
+    : '';
+
+  const content = `
+    <table align="center" border="0" cellpadding="0" cellspacing="0" width="600" style="border-collapse: collapse; border: 1px solid #cccccc;">
+      <tr>
+        <td bgcolor="#ffffff" style="padding: 40px 30px 40px 30px;">
+          <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse;">
+            <tr><td style="color: #153643; font-family: Arial, sans-serif; font-size: 16px; line-height: 24px; padding: 0 0 20px 0;"><p style="margin: 0;">Dear ${recipientName},</p></td></tr>
+            <tr>
+              <td style="color: #153643; font-family: Arial, sans-serif; font-size: 16px; line-height: 24px; padding: 0;">
+                <p style="margin: 0 0 12px 0;">${(intro || "I hope this message finds you well. At MORPHIUS AI, we specialize in transforming data into actionable insights through our AI-powered automation and predictive analytics solutions.").replace(/\n/g, '<br>')}</p>
+                ${bulletsHtml}
+                <p style="margin: 0;">${(closing || "Our tailored ML and NLP models have successfully supported clients across various sectors. I would love to schedule a brief 15-minute call to explore how we can leverage these technologies for your team.").replace(/\n/g, '<br>')}</p>
+              </td>
+            </tr>
+            <tr><td style="padding: 20px 0 0 0;">[SIGNATURE_IMAGE]</td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>`;
+
+  if (preview) {
+    return content; // For previews, return only the core content table.
+  }
+
+  // For sending, wrap it in the full HTML document structure.
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${emailSubject}</title>
+    </head>
+    <body style="margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; background-color: #ffffff;">
+      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+          <td style="padding: 20px 0 30px 0;">${content}</td>
+        </tr>
+      </table>
+    </body>
+    </html>`;
+}

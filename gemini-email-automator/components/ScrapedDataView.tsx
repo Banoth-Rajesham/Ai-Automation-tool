@@ -92,16 +92,16 @@ export const ScrapedDataView: React.FC<ScrapedDataViewProps> = ({ scrapedData, o
           </button>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-          <thead className="bg-slate-50 dark:bg-slate-700">
+      <div className="flex-grow overflow-y-auto">
+        {/* --- Desktop Table View --- */}
+        <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-700 hidden md:table">
+          <thead className="bg-slate-50 dark:bg-slate-700 sticky top-0">
             <tr>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Name</th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Role</th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Email</th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Phone</th>
               <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Source Details</th>
-              <th scope="col" className="py-3.5 px-4 text-left text-sm font-semibold text-slate-900 dark:text-slate-200">Confidence</th>
               <th scope="col" className="relative py-3.5 px-4">
                 <span className="sr-only">Actions</span>
               </th>
@@ -109,26 +109,38 @@ export const ScrapedDataView: React.FC<ScrapedDataViewProps> = ({ scrapedData, o
           </thead>
           <tbody className="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
             {scrapedData.map((item) => (
-              <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+              <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                 <td className="py-4 px-4 text-sm font-medium text-slate-900 dark:text-slate-200">{item.full_name || 'N/A'}</td>
                 <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{item.role || 'N/A'}</td>
                 <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{getEmails(item)}</td>
                 <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{getPhoneNumbers(item)}</td>
                 <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400" title={item.query}>{item.source_details || 'N/A'}</td>
-                <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">{item.confidence_score || 0}%</td>
                 <td className="relative whitespace-nowrap py-4 px-4 text-right text-sm font-medium">
-                  <button
-                    onClick={() => onMoveToProspects(item)}
-                    className="px-3 py-1 text-xs font-semibold text-white bg-blue-600 rounded-full hover:bg-blue-700 transition-colors"
-                    title="Move to Prospects"
-                  >
-                    Move
-                  </button>
+                  <button onClick={() => onMoveToProspects(item)} className="text-blue-600 hover:text-blue-800">Move</button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+
+        {/* --- Mobile Card View --- */}
+        <div className="grid grid-cols-1 gap-4 md:hidden">
+          {scrapedData.map((item) => (
+            <div key={item.id} className="p-4 rounded-lg border bg-white/80 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-lg font-bold text-slate-800 dark:text-slate-100">{item.full_name}</p>
+                  <p className="text-sm text-slate-600 dark:text-slate-300">{item.role || 'N/A'} at {item.company || 'N/A'}</p>
+                </div>
+                <button onClick={() => onMoveToProspects(item)} className="ml-4 px-3 py-1 text-xs font-semibold text-white bg-blue-600 rounded-full hover:bg-blue-700 transition-colors">Move</button>
+              </div>
+              <div className="mt-4 border-t border-slate-200 dark:border-slate-700 pt-3 space-y-2 text-sm">
+                <p><strong className="font-semibold text-slate-600 dark:text-slate-300">Email:</strong> <span className="text-slate-500 dark:text-slate-400 break-all">{getEmails(item)}</span></p>
+                <p><strong className="font-semibold text-slate-600 dark:text-slate-300">Phone:</strong> <span className="text-slate-500 dark:text-slate-400">{getPhoneNumbers(item)}</span></p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

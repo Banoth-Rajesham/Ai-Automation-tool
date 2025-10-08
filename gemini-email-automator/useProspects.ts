@@ -1,58 +1,48 @@
 import { useState, useEffect, useCallback } from 'react';
 import { type Prospect } from './types';
-import { getProspectsFromCsv } from './aiService';
+import axios from 'axios';
 
-// Helper function to merge and deduplicate prospect lists
-const mergeProspects = (existing: Prospect[], toAdd: Prospect[]): Prospect[] => {
-  const existingEmails = new Set<string>();
-  existing.forEach(prospect => {
-    if (prospect.work_email) existingEmails.add(prospect.work_email);
-    (prospect.personal_emails || []).forEach(email => existingEmails.add(email));
-  });
-
-  const uniqueNewProspects = toAdd.filter(newProspect => {
-    const newProspectEmails = [newProspect.work_email, ...(newProspect.personal_emails || [])].filter(Boolean) as string[];
-    if (newProspectEmails.length === 0) {
-      return !!newProspect.full_name;
-    }
-    return !newProspectEmails.some(email => existingEmails.has(email));
-  });
-
-  return [...existing, ...uniqueNewProspects];
-};
+const API_URL = '/api/leads';
 
 export const useProspects = () => {
   const [prospects, setProspects] = useState<Prospect[]>([]);
 
-  // Load initial prospects from localStorage and default CSV
-  useEffect(() => {
-    const fetchInitialProspects = async () => {
-      try {
-        // Always start by trying to load from localStorage.
-        const storedProspectsJson = localStorage.getItem('savedProspects') || '[]';
-        const loadedProspects = JSON.parse(storedProspectsJson);
-        setProspects(loadedProspects);
-      } catch (error) {
-        console.error("Failed to load initial prospects:", error);
-      }
-    };
-    fetchInitialProspects();
+  const fetchProspects = useCallback(async () => {
+    try {
+      const response = await axios.get<Prospect[]>(API_URL);
+      setProspects(response.data);
+    } catch (error) {
+      console.error("Failed to load prospects from database:", error);
+    }
   }, []);
 
-  // Persist prospects to localStorage whenever they change
+  // Load initial prospects from the database on mount
   useEffect(() => {
-    localStorage.setItem('savedProspects', JSON.stringify(prospects));
-  }, [prospects]);
+    fetchProspects();
+  }, [fetchProspects]);
 
   const addProspects = useCallback((newProspects: Prospect[], overwrite = false) => {
-    setProspects(prevProspects => 
-      overwrite ? mergeProspects(newProspects, prevProspects) : mergeProspects(prevProspects, newProspects)
-    );
+    // This function now primarily adds to the local state for UI responsiveness.
+    // The actual saving happens on the backend when scraping.
+    // We can refresh from the DB to get the latest truth.
+    if (overwrite) {
+      setProspects(newProspects);
+    } else {
+      setProspects(prev => [...prev, ...newProspects]);
+    }
+    // Optionally, trigger a refetch to ensure consistency
+    fetchProspects();
   }, []);
 
   const deleteProspect = useCallback((prospectId: string) => {
-    setProspects(prevProspects => prevProspects.filter(p => p.id !== prospectId));
+    axios.delete(`${API_URL}/${prospectId}`)
+      .then(() => {
+        setProspects(prevProspects => prevProspects.filter(p => p.id !== prospectId));
+      })
+      .catch(error => {
+        console.error(`Failed to delete prospect ${prospectId}:`, error);
+      });
   }, []);
 
-  return { prospects, addProspects, deleteProspect };
+  return { prospects, addProspects, deleteProspect, refreshProspects: fetchProspects };
 };

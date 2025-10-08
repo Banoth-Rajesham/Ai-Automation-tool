@@ -1,30 +1,44 @@
 
 import React, { useState } from 'react';
+import axios from 'axios';
 import BackgroundVideo from './BackgroundVideo';
 import { Sidebar } from './components/Sidebar';
-import { ChatWindow } from './components/ChatWindow';
-import { type ChatMessage, type ViewType, type Prospect, type DataSource, type ScrapedItem } from './types';
+import { ChatWindow } from './components/ChatWindow'; // Assuming ChatWindow is the component for 'dashboard'
+import { type ChatMessage, type ViewType, type Prospect, type DataSource, type ScrapedItem, type EmailPreview } from './types';
 import { processUserPrompt, getProspectsFromCsv, generateUUID } from './aiService';
 import { ProspectsView } from './components/ProspectsView';
+import Toast from './components/Toast'; // Import the new Toast component
 import { ScrapedDataView } from './components/ScrapedDataView';
+import { PreviewsView } from './components/PreviewsView';
 import { useProspects } from './useProspects';
 import { useScrapedData,  } from './useScrapedData';
-import { MongoDbView } from './components/MongoDbView';
 import { WebScraperView } from './components/WebScraperView';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewType>('dashboard');
-  const { prospects, addProspects, deleteProspect } = useProspects();
+  const { prospects, addProspects, deleteProspect, refreshProspects } = useProspects();
   const { scrapedData, addScrapedData, clearScrapedData } = useScrapedData();
   const [selectedProspectIds, setSelectedProspectIds] = useState<Set<string>>(new Set());
   const [dataSource, setDataSource] = useState<DataSource>('contactout');
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      role: 'assistant',
+      role: 'assistant', // Changed from 'assistant' to match original design
       content: "Hello! I'm your AI campaign assistant. How can I help you today? You can ask me to show prospects, generate previews, or enrich a contact by providing a LinkedIn URL.",
     }
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [emailPreviews, setEmailPreviews] = useState<EmailPreview[]>([]);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000); // Auto-hide after 3 seconds
+  };
+
+  const postAssistantMessage = (content: string, data?: any) => {
+    const newMessage: ChatMessage = { role: 'assistant', content, data };
+    setMessages(prev => [...prev, newMessage]);
+  };
 
   const handleSetDataSource = (source: DataSource) => {
     setDataSource(source);
@@ -63,11 +77,19 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const assistantResponseData = await processUserPrompt(prompt, prospects, selectedProspectIds, dataSource);
+      // For bulk operations, we can provide a progress callback
+      const onProgress = (processed: number, total: number) => {
+        showToast(`Generating... ${processed} / ${total}`, 'info');
+      };
+
+      const isBulkGeneration = prompt.toLowerCase().includes('generate previews');
+
+      const assistantResponseData = await processUserPrompt(prompt, prospects, selectedProspectIds, dataSource, onProgress, postAssistantMessage);
       const assistantMessage: ChatMessage = { 
         role: 'assistant', 
         content: assistantResponseData.text,
-        data: assistantResponseData.data,
+        // Only show data in chat if it's not for the dedicated preview page
+        data: assistantResponseData.previews ? undefined : assistantResponseData.data,
         metrics: assistantResponseData.metrics
       };
 
@@ -112,6 +134,17 @@ const App: React.FC = () => {
           addProspects(newProspects);
       } else if (isScrapedDataArray(assistantResponseData.data)) {
           addScrapedData(assistantResponseData.data as ScrapedItem[]);
+      }
+
+      // After a successful scrape and save, refresh the main prospects list from the DB
+      if (assistantResponseData.intent?.type === 'web_scrape' || assistantResponseData.intent?.type === 'search') {
+        refreshProspects();
+      }
+
+      // If previews were generated, store them and switch to the preview view
+      if (assistantResponseData.previews) {
+        setEmailPreviews(assistantResponseData.previews);
+        setCurrentView('previews_display');
       }
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -161,30 +194,11 @@ const App: React.FC = () => {
   };
 
   const handleMoveToProspects = (scrapedItem: ScrapedItem) => {
-    const newProspect: Prospect = {
-      id: scrapedItem.id || generateUUID(),
-      full_name: scrapedItem.full_name || 'N/A',
-      company: scrapedItem.company,
-      role: scrapedItem.role,
-      work_email: scrapedItem.work_email,
-      personal_emails: scrapedItem.personal_emails,
-      phone_numbers: scrapedItem.phone_numbers || [],
-      websites: scrapedItem.websites,
-      source: scrapedItem.source,
-      source_details: scrapedItem.source_details,
-      query: scrapedItem.query,
-      confidence_score: scrapedItem.confidence_score,
-      created_at: new Date().toISOString(),
-      company_id: '',
-      jurisdiction: 'N/A',
-      lawful_basis: 'legitimate_interest',
-      // UI compatibility fields
-      prospect_name: scrapedItem.full_name || 'N/A',
-      email: scrapedItem.work_email,
-    };
-    addProspects([newProspect]);
-    // Optional: remove from scraped data after moving
-    // clearScrapedData(); // or a function to remove a single item
+    // This action is now simpler. Since the data is already in the DB,
+    // we just need to ensure the main prospect list is up-to-date.
+    // The 'scraped' view is now just for review.
+    refreshProspects();
+    showToast(`✅ ${scrapedItem.full_name} is available in 'Load Data'.`, 'success');
   };
 
   const handleReturnToScraped = (prospect: Prospect) => {
@@ -208,28 +222,39 @@ const App: React.FC = () => {
   };
 
   const handleMoveAllToProspects = () => {
-    if (scrapedData.length === 0) return;
-
-    const newProspects = scrapedData.map(scrapedItem => ({
-      id: scrapedItem.id || generateUUID(),
-      full_name: scrapedItem.full_name || 'N/A',
-      company: scrapedItem.company,
-      role: scrapedItem.role,
-      work_email: scrapedItem.work_email,
-      personal_emails: scrapedItem.personal_emails,
-      phone_numbers: scrapedItem.phone_numbers || [],
-      websites: scrapedItem.websites,
-      source: scrapedItem.source,
-      source_details: scrapedItem.source_details,
-      query: scrapedItem.query,
-      confidence_score: scrapedItem.confidence_score,
-      created_at: new Date().toISOString(),
-      company_id: '',
-      jurisdiction: 'N/A',
-      lawful_basis: 'legitimate_interest' as const,
-    }));
-    addProspects(newProspects);
+    // This action is now simpler. We just clear the temporary scraped data view
+    // and ensure the main list is fresh.
+    refreshProspects();
+    showToast(`✅ All new leads are available in 'Load Data'.`, 'success');
     clearScrapedData(); // Clear the scraped data after moving
+  };
+
+  const handleAddTestProspect = async (prospectData: Partial<Prospect>) => {
+    // Create an object that matches the ScrapedItem structure for the backend
+    const leadToSave: ScrapedItem = {
+      id: generateUUID(),
+      full_name: prospectData.full_name || 'N/A',
+      company: prospectData.company || '',
+      role: prospectData.role,
+      work_email: prospectData.work_email || '',
+      personal_emails: [],
+      phone_numbers: Array.isArray(prospectData.phone_numbers) ? prospectData.phone_numbers : [],
+      websites: [],
+      source: 'manual_test',
+      source_details: 'Manually added by user',
+      query: 'manual',
+      confidence_score: 100,
+    };
+
+    try {
+      // Also save this manually added prospect to the backend
+      await axios.post('/api/save-leads', [leadToSave]);
+      showToast(`✅ Test prospect added and saved!`, "success");
+      refreshProspects(); // Refresh to show the newly saved prospect
+    } catch (error) {
+      console.error("Failed to save manually added prospect:", error);
+      showToast("Error saving prospect. See console for details.", "error");
+    }
   };
 
   const renderCurrentView = () => {
@@ -240,6 +265,9 @@ const App: React.FC = () => {
           selectedIds={selectedProspectIds}
           onSelectionChange={setSelectedProspectIds}
           onDeleteProspect={handleDeleteProspect}
+          onAddTestProspect={handleAddTestProspect}
+          hasProspects={prospects.length > 0} // Indicate if prospects are loaded
+          showToast={showToast} // Pass showToast for local toasts
           onReturnToScraped={handleReturnToScraped}
         />;
       case 'scraped':
@@ -249,14 +277,24 @@ const App: React.FC = () => {
           onMoveToProspects={handleMoveToProspects}
           onMoveAllToProspects={handleMoveAllToProspects}
         />;
+      case 'previews_display':
+        return <PreviewsView 
+          previews={emailPreviews}
+          onBack={() => setCurrentView('dashboard')}
+        />;
+      case 'send':
+        // These views are handled by sending a message, which then shows up in the dashboard chat view.
+        // The view is switched to 'dashboard' to show the result.
+        return <ChatWindow messages={messages} onFileUpload={handleFileUpload} onSendMessage={handleSendMessage} isLoading={isLoading} />;
+      case 'replies':
+        return <ChatWindow messages={messages} onFileUpload={handleFileUpload} onSendMessage={handleSendMessage} isLoading={isLoading} />;
+
       case 'scraper_input':
         return <WebScraperView
           onSendMessage={handleSendMessage}
           isLoading={isLoading}
           messages={messages}
         />;
-      case 'database':
-        return <MongoDbView />;
       case 'dashboard':
       default:
         return (
@@ -279,6 +317,7 @@ const App: React.FC = () => {
         dataSource={dataSource}
         setDataSource={handleSetDataSource}
       />
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       <main className="flex-1 flex flex-col bg-transparent">
         {renderCurrentView()}
       </main>
