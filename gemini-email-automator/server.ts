@@ -94,21 +94,6 @@ const ensureTableExists = async () => {
 app.use(cors());
 app.use(bodyParser.json());
 
-// --- Serve Static Frontend Files (for Production) ---
-if (process.env.NODE_ENV === 'production') {
-  // The production build of the frontend is expected to be in `dist`
-  const clientBuildPath = path.join(__dirname, '..', 'dist');
-  app.use(express.static(clientBuildPath));
-
-  // For any other request, serve the index.html file for client-side routing
-  app.get('*', (req, res) => {
-    // Exclude API routes from this catch-all
-    if (!req.originalUrl.startsWith('/api/')) {
-      res.sendFile(path.join(clientBuildPath, 'index.html'));
-    }
-  });
-}
-
 /**
  * Endpoint to save scraped leads to the database.
  */
@@ -414,6 +399,23 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
     return res.status(500).json({ message: 'Failed to send email.', error: error.message });
   }
 });
+
+// --- Serve Static Frontend Files (for Production) ---
+// This block must be AFTER all API routes.
+if (process.env.NODE_ENV === 'production') {
+  const clientBuildPath = path.join(__dirname, '..', 'dist');
+  app.use(express.static(clientBuildPath));
+
+  // For any other request that doesn't match an API route,
+  // serve the index.html file for client-side routing.
+  app.get('*', (req, res) => {
+    // The check for '/api/' is no longer strictly necessary here
+    // because this route is now at the end, but it's good for clarity.
+    if (!req.originalUrl.startsWith('/api/')) {
+      res.sendFile(path.join(clientBuildPath, 'index.html'));
+    }
+  });
+}
 
 const startServer = async () => {
   try {
