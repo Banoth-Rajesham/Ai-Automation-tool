@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: ai-automation-tool
+    env: node
+    # If your package.json is in a subdirectory like 'gemini-email-automator',
+    # uncomment the line below. If it's at the root, leave this commented.
+    # rootDir: gemini-email-automator
+    plan: free # Or your desired instance type
+    buildCommand: "npm install && npm run build"
+    startCommand: "npm start"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # IMPORTANT: Add all your other environment variables from your .env file here.
+      # - key: PG_USER
+      #   value: your_db_user
+      # - key: PG_PASSWORD
+      #   sync: false # For secrets
