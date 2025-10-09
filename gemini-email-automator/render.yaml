@@ -5,7 +5,7 @@ services:
     rootDir: gemini-email-automator
     plan: free # Or your desired instance type
     buildCommand: "npm install && npm run build"
-    startCommand: "npm start"
+    startCommand: "node dist-server/server.js"
     envVars:
       - key: NODE_ENV
         value: production
