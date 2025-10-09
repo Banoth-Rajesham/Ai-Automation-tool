@@ -4,7 +4,7 @@ const envPath = process.env.NODE_ENV === 'production' ? '.env' : '.env.local';
 dotenv.config({ path: envPath });
 dotenv.config(); // Also load .env as a fallback
 
-import express from 'express';
+import express, { Request, Response } from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import pkg from 'pg';
@@ -12,7 +12,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import nodemailer from 'nodemailer';
-import { type ScrapedItem } from './types';
+import { type ScrapedItem } from './types.js';
 
 const { Pool } = pkg;
 
@@ -103,7 +103,7 @@ if (process.env.NODE_ENV === 'production') {
 /**
  * Endpoint to save scraped leads to the database.
  */
-app.post('/api/save-leads', async (req, res) => {
+app.post('/api/save-leads', async (req: Request, res: Response) => {
   const leads: ScrapedItem[] = req.body;
 
   if (!leads || !Array.isArray(leads) || leads.length === 0) {
@@ -135,7 +135,7 @@ app.post('/api/save-leads', async (req, res) => {
 /**
  * Endpoint to fetch all scraped leads from the database.
  */
-app.get('/api/leads', async (_req, res) => {
+app.get('/api/leads', async (_req: Request, res: Response) => {
     try {
         const client = await pool.connect();
         try {
@@ -153,7 +153,7 @@ app.get('/api/leads', async (_req, res) => {
 /**
  * Endpoint to delete a single lead by its ID.
  */
-app.delete('/api/leads/:id', async (req, res) => {
+app.delete('/api/leads/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
     const client = await pool.connect();
@@ -177,7 +177,7 @@ app.delete('/api/leads/:id', async (req, res) => {
  * In a real app, this might be a webhook hit by your email service provider.
  * For this simulation, we'll use mailto links that could redirect to this.
  */
-app.post('/api/track-reply', async (req, res) => {
+app.post('/api/track-reply', async (req: Request, res: Response) => {
     const { prospectId, action, sentiment, prospectEmail } = req.body;
 
     if (!prospectId || !action) {
@@ -232,7 +232,7 @@ async function sendEmailHelper(to: string, subject: string, htmlBody: string, at
 /**
  * Endpoint to handle quick reply actions from emails.
  */
-app.get('/api/quick-reply-action', async (req, res) => {
+app.get('/api/quick-reply-action', async (req: Request, res: Response) => {
     const { prospectId, prospectEmail, action } = req.query;
 
     if (!prospectId || !prospectEmail || !action) {
@@ -292,7 +292,7 @@ app.get('/api/quick-reply-action', async (req, res) => {
 /**
  * Endpoint to fetch all email activity for reporting.
  */
-app.get('/api/email-activity', async (_req, res) => {
+app.get('/api/email-activity', async (_req: Request, res: Response) => {
     try {
         const client = await pool.connect();
         try {
@@ -317,7 +317,7 @@ app.get('/api/email-activity', async (_req, res) => {
 /**
  * Endpoint to send a single email.
  */
-app.post('/api/send-email', async (req, res) => {
+app.post('/api/send-email', async (req: Request, res: Response) => {
   let { to, subject, body } = req.body;
 
   if (!to || !subject || !body) {
