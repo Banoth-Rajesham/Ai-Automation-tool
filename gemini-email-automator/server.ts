@@ -119,7 +119,7 @@ app.post('/api/save-leads', async (req: Request, res: Response) => {
       for (const lead of leads) {
         const values = [lead.id, lead.full_name, lead.company, lead.role, lead.work_email, lead.personal_emails, lead.phone_numbers, JSON.stringify(lead.websites), lead.source_details, lead.source, lead.query, lead.confidence_score];
         const result = await client.query(queryText, values);
-        insertedCount += result.rowCount;
+        insertedCount += result.rowCount ?? 0;
       }
       await client.query('COMMIT');
       res.status(201).json({ message: `Successfully inserted ${insertedCount} new leads (duplicates were ignored).` });
