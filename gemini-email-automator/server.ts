@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 // Load environment variables from .env.local (or .env)
-dotenv.config({ path: '.env.local' });
+const envPath = process.env.NODE_ENV === 'production' ? '.env' : '.env.local';
+dotenv.config({ path: envPath });
 dotenv.config(); // Also load .env as a fallback
 
 import express from 'express';
@@ -8,6 +9,7 @@ import cors from 'cors';
 import bodyParser from 'body-parser';
 import pkg from 'pg';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 import path from 'path';
 import nodemailer from 'nodemailer';
 import { type ScrapedItem } from './types';
@@ -16,6 +18,10 @@ const { Pool } = pkg;
 
 const app = express();
 const port = 3001;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 
 // --- Load and cache the signature image on server start ---
 // Ensure CALCOM_API_KEY is loaded from .env.local
@@ -78,6 +84,21 @@ const ensureTableExists = async () => {
 
 app.use(cors());
 app.use(bodyParser.json());
+
+// --- Serve Static Frontend Files (for Production) ---
+if (process.env.NODE_ENV === 'production') {
+  // The production build of the frontend is expected to be in `dist`
+  const clientBuildPath = path.join(__dirname, '..', 'dist');
+  app.use(express.static(clientBuildPath));
+
+  // For any other request, serve the index.html file for client-side routing
+  app.get('*', (req, res) => {
+    // Exclude API routes from this catch-all
+    if (!req.originalUrl.startsWith('/api/')) {
+      res.sendFile(path.join(clientBuildPath, 'index.html'));
+    }
+  });
+}
 
 /**
  * Endpoint to save scraped leads to the database.
@@ -231,24 +252,10 @@ app.get('/api/quick-reply-action', async (req, res) => {
                 sentiment = 'Interested';
                 followUpSubject = 'Great! Let\'s schedule a meeting.';
 
-                // 2. Generate Cal.com meeting link
-                const calcomApiKey = process.env.CALCOM_API_KEY;
-                if (calcomApiKey) {
-                    // This assumes you have a pre-configured event type in Cal.com
-                    // Replace 'your-event-type-id' with an actual event type ID from your Cal.com account
-                    // Or, you might create a booking directly if you have prospect details
-                    const calcomEventType = process.env.CALCOM_EVENT_TYPE_ID || 'your-default-event-type'; // e.g., '15min-meeting'
-                    const calcomBaseUrl = process.env.CALCOM_BASE_URL || 'https://api.cal.com';
-
-                    // For simplicity, we'll generate a direct link to a user's event type
-                    // In a more advanced setup, you'd create a one-off meeting or pre-fill details.
-                    meetingLink = `https://cal.com/morphius-ai/${calcomEventType}`; // Example: replace 'morphius-ai' with your Cal.com username
-
-                    followUpBody = `Dear Prospect,\n\nThanks for your interest! You can book a convenient time for a 15-minute call using this link:\n\n${meetingLink}\n\nLooking forward to connecting!\n\nMORPHIUS AI Team`;
-                } else {
-                    followUpBody = `Dear Prospect,\n\nThanks for your interest! We'll get back to you shortly to schedule a meeting.\n\nMORPHIUS AI Team`;
-                    console.warn('CALCOM_API_KEY not set. Cannot generate meeting link.');
-                }
+                // 2. Use the correct, hardcoded Cal.com meeting link.
+                meetingLink = 'https://cal.com/banoth-rajesham-jxhqyz/30min?overlayCalendar=true';
+                followUpBody = `Dear Prospect,\n\nThanks for your interest! You can book a convenient time for a 30-minute call using this link:\n\n${meetingLink}\n\nLooking forward to connecting!\n\nMORPHIUS AI Team`;
+                
             } else if (action === 'more_info') {
                 sentiment = 'More Info Requested';
                 followUpSubject = 'Here\'s more information about MORPHIUS AI';
@@ -270,8 +277,12 @@ app.get('/api/quick-reply-action', async (req, res) => {
             await sendEmailHelper(prospectEmail as string, followUpSubject, followUpBody);
         }
 
-        // Redirect to a confirmation page or send a simple response
-        res.status(200).send(`Action "${action}" for ${prospectEmail} tracked successfully. ${meetingLink ? `Meeting link: ${meetingLink}` : ''}`);
+        // 4. Send a simple confirmation message instead of redirecting.
+        // This prevents any localhost or other pages from opening on the client's side.
+        const confirmationMessage = action === 'interested'
+            ? "Thank you for your interest! A follow-up email with a meeting link has been sent to your inbox."
+            : "Thank you. Your response has been recorded.";
+        res.status(200).send(`<html><body style="font-family: sans-serif; text-align: center; padding-top: 50px;"><h1>${confirmationMessage}</h1></body></html>`);
     } catch (error: any) {
         console.error('Failed to process quick reply action:', error);
         res.status(500).send('Failed to process your request.');
@@ -342,13 +353,13 @@ app.post('/api/send-email', async (req, res) => {
         <tr>
           <td style="padding-top: 20px; text-align: center; font-family: Arial, sans-serif;">
             <p style="margin: 0 0 10px 0; font-size: 13px; color: #555555;"><strong>Quick Reply:</strong></p>
-            <a href="${process.env.FRONTEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=interested" style="background-color: #4CAF50; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; margin: 0 5px;" target="_blank">I'm Interested</a>
-            <a href="${process.env.FRONTEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=more_info" style="background-color: #008CBA; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; margin: 0 5px;" target="_blank">Send More Info</a>
+            <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=interested" style="background-color: #4CAF50; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; margin: 0 5px;" target="_blank">I'm Interested</a>
+            <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=more_info" style="background-color: #008CBA; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; margin: 0 5px;" target="_blank">Send More Info</a>
           </td>
         </tr>
         <tr>
           <td style="padding-top: 20px; font-size: 12px; color: #888888; text-align: center;">
-            <p style="margin: 0;">If you no longer wish to receive these emails, you can <a href="${process.env.FRONTEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=unsubscribe" style="color: #888888;" target="_blank">unsubscribe here</a>.</p>
+            <p style="margin: 0;">If you no longer wish to receive these emails, you can <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=unsubscribe" style="color: #888888;" target="_blank">unsubscribe here</a>.</p>
           </td>
         </tr>
       </table>
@@ -361,7 +372,7 @@ app.post('/api/send-email', async (req, res) => {
         Best regards,<br>
         <strong>MORPHIUS AI Team</strong><br>
         <a href="mailto:hello@morphius.in" style="color: #1a0dab;">hello@morphius.in</a><br>+91 7981809795<br><a href="https://www.morphius.in" style="color: #1a0dab;" target="_blank">https://www.morphius.in</a>
-        <p style="margin-top: 20px; font-size: 12px; color: #888888;">If you no longer wish to receive these emails, you can <a href="${process.env.FRONTEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=unsubscribe" style="color: #888888;" target="_blank">unsubscribe here</a>.</p>
+        <p style="margin-top: 20px; font-size: 12px; color: #888888;">If you no longer wish to receive these emails, you can <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=unsubscribe" style="color: #888888;" target="_blank">unsubscribe here</a>.</p>
       </div>`;
     finalHtmlBody = body.replace('[SIGNATURE_IMAGE]', textSignature);
   }

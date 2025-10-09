@@ -11,6 +11,11 @@ export default defineConfig({
         target: 'http://localhost:3001',
         changeOrigin: true,
       },
+      // Add a proxy for the confirmation page to redirect to index.html
+      '/confirmation': {
+        target: 'http://localhost:5173',
+        rewrite: (path) => '/index.html'
+      }
     },
   },
 });

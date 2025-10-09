@@ -75,7 +75,7 @@ export interface CampaignMetrics {
 
 export interface RecentActivity {
   email: string;
-  status: 'Replied' | 'Unsubscribed' | 'Bounced';
+  status: 'Replied' | 'Unsubscribed' | 'Bounced' | 'interested' | 'more_info' | 'not_interested';
   sentiment?: 'Interested' | 'Not Interested';
   date: string;
 }

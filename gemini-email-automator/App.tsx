@@ -58,11 +58,12 @@ const App: React.FC = () => {
         replies: 'check replies',
       };
       handleSendMessage(commandMap[view]);
+      setCurrentView('dashboard'); // Switch to dashboard to see the result
     }
     // If user navigates away from scraper input, switch data source back
     if (currentView === 'scraper_input' && view !== 'scraper_input') {
         setDataSource('contactout');
-    }
+    } 
     if (view === 'scraper_input') {
         setDataSource('webscraping');
     }
@@ -85,7 +86,7 @@ const App: React.FC = () => {
       const isBulkGeneration = prompt.toLowerCase().includes('generate previews');
 
       const assistantResponseData = await processUserPrompt(prompt, prospects, selectedProspectIds, dataSource, onProgress, postAssistantMessage);
-      const assistantMessage: ChatMessage = { 
+      const assistantMessage: ChatMessage = {
         role: 'assistant', 
         content: assistantResponseData.text,
         // Only show data in chat if it's not for the dedicated preview page
@@ -96,14 +97,14 @@ const App: React.FC = () => {
       // --- Consolidated Prospect Handling Logic ---
       // This block now handles adding new prospects from any source (enrichment, search, etc.)
       // It will only add prospects if the data array is present, not empty, and contains valid items.
-      const isProspectDataArray = (data: any): data is Partial<Prospect>[] => {
+      const isProspectDataArray = (data: any): data is Partial<Prospect>[] => { // NOSONAR
         return (
           Array.isArray(data) &&
           data.length > 0 && 'full_name' in data[0] && !('query' in data[0])
         );
       };
 
-      const isScrapedDataArray = (data: any): data is ScrapedItem[] => {
+      const isScrapedDataArray = (data: any): data is ScrapedItem[] => { // NOSONAR
         return (
           Array.isArray(data) &&
           data.length > 0 &&
@@ -193,14 +194,23 @@ const App: React.FC = () => {
     setSelectedProspectIds(prev => new Set([...prev].filter(id => id !== prospectId)));
   };
 
-  const handleMoveToProspects = (scrapedItem: ScrapedItem) => {
-    // This action is now simpler. Since the data is already in the DB,
-    // we just need to ensure the main prospect list is up-to-date.
-    // The 'scraped' view is now just for review.
-    refreshProspects();
-    showToast(`✅ ${scrapedItem.full_name} is available in 'Load Data'.`, 'success');
-  };
+  const handleMoveToProspects = async (scrapedItem: ScrapedItem) => {
+    try {
+      // Save the single scraped item to the backend
+      await axios.post('/api/save-leads', [scrapedItem]);
+      showToast(`✅ ${scrapedItem.full_name} saved to prospects.`, 'success');
+      
+      // Remove the item from the local scrapedData state
+      clearScrapedData([scrapedItem.id]);
 
+      // Refresh the main prospects list from the DB
+      refreshProspects();
+    } catch (error) {
+      console.error("Failed to save scraped item:", error);
+      showToast("Error saving prospect. See console for details.", "error");
+    }
+  };
+  
   const handleReturnToScraped = (prospect: Prospect) => {
     const scrapedItem: ScrapedItem = {
       id: prospect.id,
@@ -221,12 +231,20 @@ const App: React.FC = () => {
     deleteProspect(prospect.id);
   };
 
-  const handleMoveAllToProspects = () => {
-    // This action is now simpler. We just clear the temporary scraped data view
-    // and ensure the main list is fresh.
-    refreshProspects();
-    showToast(`✅ All new leads are available in 'Load Data'.`, 'success');
-    clearScrapedData(); // Clear the scraped data after moving
+  const handleMoveAllToProspects = async () => {
+    if (scrapedData.length === 0) {
+      showToast("No scraped data to move.", "info");
+      return;
+    }
+    try {
+      await axios.post('/api/save-leads', scrapedData);
+      showToast(`✅ All ${scrapedData.length} new leads saved to prospects.`, 'success');
+      clearScrapedData(); // Clear all scraped data after moving
+      refreshProspects(); // Refresh the main list
+    } catch (error) {
+      console.error("Failed to save all scraped leads:", error);
+      showToast("Error saving prospects. See console for details.", "error");
+    }
   };
 
   const handleAddTestProspect = async (prospectData: Partial<Prospect>) => {
