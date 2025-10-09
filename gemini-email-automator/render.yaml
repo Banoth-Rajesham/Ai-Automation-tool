@@ -2,11 +2,9 @@ services:
   - type: web
     name: ai-automation-tool
     env: node
-    # If your package.json is in a subdirectory like 'gemini-email-automator',
-    # uncomment the line below. If it's at the root, leave this commented.
-    # rootDir: gemini-email-automator
+    rootDir: gemini-email-automator
     plan: free # Or your desired instance type
-    buildCommand: "npm install && npm run build"
+    buildCommand: "npm run build"
     startCommand: "npm start"
     envVars:
       - key: NODE_ENV
