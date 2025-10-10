@@ -212,8 +212,6 @@ app.post('/api/track-reply', async (req: Request, res: Response) => {
 async function sendEmailHelper(to: string, subject: string, htmlBody: string, attachments: any[] = []) {
   // Create a single, reusable transporter for sending emails
   const transporter = nodemailer.createTransport({
-    // Using 'service' helps Nodemailer apply best settings for Gmail
-    service: 'gmail',
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT),
     secure: process.env.SMTP_SECURE === 'true',
@@ -243,7 +241,7 @@ async function sendEmailHelper(to: string, subject: string, htmlBody: string, at
     return true;
   } catch (error: any) {
     console.error(`Failed to send email to ${to}:`, error);
-    throw error; // Re-throw the error to be caught by the calling endpoint
+    return false; // Return false on failure as expected by the caller
   }
 }
 
@@ -401,6 +399,9 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
     // The helper now throws on failure, so if we get here, it was successful.
     if (success) {
       return res.status(200).json({ message: `Email sent successfully to ${to}` });
+    } else {
+      // If the helper returns false, it means an error occurred and was logged.
+      return res.status(500).json({ message: 'Failed to send email. See server logs for details.' });
     }
   } catch (error: any) {
     console.error('Failed to send initial email:', error);
