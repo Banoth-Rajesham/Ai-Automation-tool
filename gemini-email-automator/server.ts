@@ -13,8 +13,8 @@ import pkg from 'pg';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
-import { type ScrapedItem } from './types.js';
-import Resend from 'resend';
+import { type ScrapedItem } from './types';
+import { Resend } from 'resend';
 
 const { Pool } = pkg;
 
