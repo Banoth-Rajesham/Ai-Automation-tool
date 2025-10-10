@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { type ScrapedItem } from './types.js';
 import { Resend } from 'resend';
+import { OpenAI } from 'openai';
 
 const { Pool } = pkg;
 
@@ -41,7 +42,7 @@ if (!signatureImagePath) {
 }
 
 // --- Environment Variable Check ---
-const requiredEnvVars = ['RESEND_API_KEY', 'BACKEND_URL', 'RESEND_FROM_EMAIL', 'RESEND_SANDBOX_TO_EMAIL'];
+const requiredEnvVars = ['RESEND_API_KEY', 'BACKEND_URL', 'RESEND_FROM_EMAIL', 'OPENAI_API_KEY'];
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingVars.length > 0) {
@@ -49,6 +50,11 @@ if (missingVars.length > 0) {
   console.error('Please set these variables in your .env file for local development or in your hosting provider (Render) for production.');
   process.exit(1); // Exit the process with an error code
 }
+
+// Initialize OpenAI on the server
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 
 // PostgreSQL connection pool
@@ -106,6 +112,33 @@ const ensureTableExists = async () => {
 
 app.use(cors());
 app.use(bodyParser.json());
+
+/**
+ * Proxy endpoint for OpenAI to avoid exposing the API key on the client-side.
+ */
+app.post('/api/openai-proxy', async (req: Request, res: Response) => {
+  const { systemInstruction, userPrompt, model = 'gpt-4o-mini' } = req.body;
+
+  if (!systemInstruction || !userPrompt) {
+    return res.status(400).json({ message: 'systemInstruction and userPrompt are required.' });
+  }
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: model,
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: userPrompt }
+      ],
+      response_format: { type: "json_object" },
+    });
+    const content = completion.choices[0]?.message?.content;
+    res.status(200).json(JSON.parse(content || '{}'));
+  } catch (error: any) {
+    console.error('OpenAI proxy error:', error);
+    res.status(error.status || 500).json({ message: 'Failed to get response from OpenAI.', error: error.message });
+  }
+});
 
 /**
  * Endpoint to save scraped leads to the database.

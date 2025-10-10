@@ -1,35 +1,9 @@
-import OpenAI from "openai";
 import axios from 'axios';
 import Papa from 'papaparse';
 import { type AssistantMessageData, type Prospect, type CampaignMetrics, type RecentActivity, type Company, type DataSource, ScrapedItem, EmailPreview } from './types';
 import { type Campaign } from './types';
 
-let openai: OpenAI;
 let contactOutApi: ReturnType<typeof axios.create>;
-
-/**
- * Initializes and returns the OpenAI client instance.
- * IMPORTANT: This implementation is for client-side usage and exposes the API key.
- * For production, you should move API calls to a secure backend.
- * 
- * @security This is a major security risk. In a production environment, this key
- * should be on a server, and the client should make requests to your server,
- * which then calls the OpenAI API.
- */
-function getOpenAIClient(): OpenAI {
-  if (!openai) {
-    const openaiApiKey = import.meta.env.VITE_OPENAI_API_KEY as string;
-    if (!openaiApiKey) {
-      throw new Error("The VITE_OPENAI_API_KEY environment variable is not set. Please check your .env.local file and restart the server.");
-    }
-    openai = new OpenAI({
-      apiKey: openaiApiKey,
-      // This is required for client-side (browser) usage of the OpenAI SDK
-      dangerouslyAllowBrowser: true,
-    });
-  }
-  return openai;
-}
 
 const MAX_RETRIES = 3;
 const INITIAL_DELAY_MS = 1000;
@@ -76,28 +50,15 @@ async function apiCallWithRetry<T>(apiCall: () => Promise<T>, onRetry?: (attempt
 }
 
 async function getJsonFromOpenAI(systemInstruction: string, userPrompt: string): Promise<any> {
-    const openaiClient = getOpenAIClient();
-    const model = "gpt-4o-mini";
-
-    const completion = await apiCallWithRetry(() => openaiClient.chat.completions.create({
-        model: model,
-        messages: [
-            { role: "system", content: systemInstruction },
-            { role: "user", content: userPrompt }
-        ],
-        response_format: { type: "json_object" },
-    }), (attempt, delay) => {
-        console.warn(`OpenAI API rate limit hit. Retrying in ${delay}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
-    });
-
-    const content = completion.choices[0]?.message?.content;
-
-    if (!content) {
-        throw new Error("OpenAI API did not return any content.");
-    }
-
     try {
-        return JSON.parse(content);
+        const response = await apiCallWithRetry(() => axios.post('/api/openai-proxy', {
+            systemInstruction,
+            userPrompt,
+        }), (attempt, delay) => {
+            console.warn(`OpenAI API call failed. Retrying in ${delay}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
+        });
+        // The backend now returns the parsed JSON directly.
+        return response.data;
     } catch (e) {
         console.error("Failed to parse JSON from OpenAI:", content);
         throw new Error("Received malformed JSON from the AI.");
