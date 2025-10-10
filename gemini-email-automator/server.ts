@@ -409,11 +409,8 @@ if (process.env.NODE_ENV === 'production') {
   // For any other request that doesn't match an API route,
   // serve the index.html file for client-side routing.
   app.get('*', (req, res) => {
-    // The check for '/api/' is no longer strictly necessary here
-    // because this route is now at the end, but it's good for clarity.
-    if (!req.originalUrl.startsWith('/api/')) {
-      res.sendFile(path.join(clientBuildPath, 'index.html'));
-    }
+    // This catch-all route should always serve the index.html file for client-side routing.
+    res.sendFile(path.join(clientBuildPath, 'index.html'));
   });
 }
 
@@ -421,7 +418,7 @@ const startServer = async () => {
   try {
     await ensureTableExists();
     app.listen(port, () => {
-      console.log(`🚀 Backend server listening on port ${port}`);
+      console.log(`🚀 Backend server listening on http://localhost:${port}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
