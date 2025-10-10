@@ -269,16 +269,16 @@ app.get('/api/quick-reply-action', async (req: Request, res: Response) => {
 
                 // 2. Use the correct, hardcoded Cal.com meeting link.
                 meetingLink = 'https://cal.com/banoth-rajesham-jxhqyz/30min?overlayCalendar=true';
-                followUpBody = `Dear Prospect,\n\nThanks for your interest! You can book a convenient time for a 30-minute call using this link:\n\n${meetingLink}\n\nLooking forward to connecting!\n\nMORPHIUS AI Team`;
+                followUpBody = `<p>Dear Prospect,</p><p>Thanks for your interest! You can book a convenient time for a 30-minute call using this link:</p><p><a href="${meetingLink}">${meetingLink}</a></p><p>Looking forward to connecting!</p><p>MORPHIUS AI Team</p>`;
                 
             } else if (action === 'more_info') {
                 sentiment = 'More Info Requested';
                 followUpSubject = 'Here\'s more information about MORPHIUS AI';
-                followUpBody = `Dear Prospect,\n\nThanks for your interest! You can find more details about MORPHIUS AI and our solutions on our website: https://www.morphius.in\n\nFeel free to reach out if you have any questions.\n\nMORPHIUS AI Team`;
+                followUpBody = `<p>Dear Prospect,</p><p>Thanks for your interest! You can find more details about MORPHIUS AI and our solutions on our website: <a href="https://www.morphius.in">https://www.morphius.in</a></p><p>Feel free to reach out if you have any questions.</p><p>MORPHIUS AI Team</p>`;
             } else if (action === 'unsubscribe') {
                 sentiment = 'Unsubscribed';
                 followUpSubject = 'Unsubscribe Confirmation';
-                followUpBody = `Dear Prospect,\n\nYou have been successfully unsubscribed from our mailing list. We're sorry to see you go!\n\nMORPHIUS AI Team`;
+                followUpBody = `<p>Dear Prospect,</p><p>You have been successfully unsubscribed from our mailing list. We're sorry to see you go!</p><p>MORPHIUS AI Team</p>`;
             }
 
             const queryText = 'INSERT INTO email_activity (prospect_id, prospect_email, action, sentiment) VALUES ($1, $2, $3, $4)';
