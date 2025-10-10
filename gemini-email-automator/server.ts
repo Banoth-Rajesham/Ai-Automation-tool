@@ -197,16 +197,37 @@ app.post('/api/track-reply', async (req: Request, res: Response) => {
  * Helper function to send an email using Nodemailer.
  */
 async function sendEmailHelper(to: string, subject: string, htmlBody: string, attachments: any[] = []) {
+  // Create a single, reusable transporter for sending emails
   const transporter = nodemailer.createTransport({
+    // Using 'service' helps Nodemailer apply best settings for Gmail
+    service: 'gmail',
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT),
     secure: process.env.SMTP_SECURE === 'true',
+    // Increase timeouts and add explicit TLS options for better reliability
+    connectionTimeout: 30000, // 30 seconds
+    socketTimeout: 30000, // 30 seconds
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    tls: {
+      // Enforce a modern version of TLS
+      minVersion: 'TLSv1.2'
+    },
   });
 
+  // Verify the connection before trying to send. This gives a clearer error.
+  try {
+    await transporter.verify();
+    console.log('✅ SMTP Connection verified successfully.');
+  } catch (error) {
+    console.error('❌ SMTP Connection verification failed. Please check your .env.local settings, firewall, and antivirus.', error);
+    // Re-throw to prevent sending attempt
+    throw new Error('SMTP connection failed verification.');
+  }
+
+  // Define mail options
   try {
     const info = await transporter.sendMail({
       from: `"MORPHIUS AI" <${process.env.SMTP_USER}>`,
@@ -215,11 +236,11 @@ async function sendEmailHelper(to: string, subject: string, htmlBody: string, at
       html: htmlBody,
       attachments: attachments,
     });
-    console.log(`Follow-up email sent successfully to ${to}: ${info.messageId}`);
+    console.log(`Email sent successfully to ${to}: ${info.messageId}`);
     return true;
   } catch (error: any) {
-    console.error(`Failed to send follow-up email to ${to}:`, error);
-    return false;
+    console.error(`Failed to send email to ${to}:`, error);
+    throw error; // Re-throw the error to be caught by the calling endpoint
   }
 }
 
@@ -371,38 +392,31 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
     finalHtmlBody = body.replace('[SIGNATURE_IMAGE]', textSignature);
   }
 
-
-
-  // Configure Nodemailer transporter
-  // It's recommended to use environment variables for security
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT),
-    secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-
   try {
-    const success = await sendEmailHelper(to, subject, finalHtmlBody, attachments);
-    if (!success) throw new Error("Failed to send email via Nodemailer helper.");
-
-    res.status(200).json({ message: `Email sent successfully to ${to}` });
+    // Use the centralized helper function to send the email
+    const success = await sendEmailHelper(to as string, subject as string, finalHtmlBody, attachments);
+    // The helper now throws on failure, so if we get here, it was successful.
+    if (success) {
+      res.status(200).json({ message: `Email sent successfully to ${to}` });
+    } // This else block is unreachable because sendEmailHelper throws on error.
   } catch (error: any) {
     console.error('Failed to send initial email:', error);
     // Provide a more specific error message for authentication issues
-    if (error.code === 'EAUTH') {
-      return res.status(500).json({ message: 'Failed to send email: Invalid SMTP credentials. Please check your .env.local file.', error: error.message });
+    if (error.code === 'ETIMEDOUT') {
+      return res.status(500).json({ message: `Connection to SMTP server timed out. Please check your SMTP_HOST and SMTP_PORT in .env.local and ensure no firewall is blocking the connection.`, error: error.message });
+    } else if (error.code === 'EAUTH') {
+      return res.status(500).json({ message: 'Authentication error: Invalid SMTP credentials. Please check your SMTP_USER and SMTP_PASS in .env.local.', error: error.message });
     }
-    return res.status(500).json({ message: 'Failed to send email.', error: error.message });
+    return res.status(500).json({ message: 'An unknown error occurred while sending the email.', error: error.message });
   }
 });
 
 // --- Serve Static Frontend Files (for Production) --- This block must be AFTER all API routes.
 if (process.env.NODE_ENV === 'production') {
-  const clientBuildPath = path.join(__dirname, '..', 'dist');
+  // Resolve the path to the 'dist' directory relative to the current file.
+  // This is more robust for different deployment environments.
+  const clientBuildPath = path.resolve(__dirname, '..', 'dist');
+
   app.use(express.static(clientBuildPath));
 
   // For any other request that doesn't match an API route,
