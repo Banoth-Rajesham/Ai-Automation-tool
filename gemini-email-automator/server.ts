@@ -13,8 +13,8 @@ import pkg from 'pg';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
-import nodemailer from 'nodemailer';
 import { type ScrapedItem } from './types.js';
+import Resend from 'resend';
 
 const { Pool } = pkg;
 
@@ -41,7 +41,7 @@ if (!signatureImagePath) {
 }
 
 // --- Environment Variable Check ---
-const requiredEnvVars = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASS', 'BACKEND_URL'];
+const requiredEnvVars = ['RESEND_API_KEY', 'BACKEND_URL'];
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingVars.length > 0) {
