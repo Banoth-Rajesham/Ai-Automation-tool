@@ -39,7 +39,7 @@ if (!signatureImagePath) {
 }
 
 // --- Environment Variable Check ---
-const requiredEnvVars = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS'];
+const requiredEnvVars = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'BACKEND_URL'];
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingVars.length > 0) {
@@ -227,16 +227,6 @@ async function sendEmailHelper(to: string, subject: string, htmlBody: string, at
       minVersion: 'TLSv1.2'
     },
   });
-
-  // Verify the connection before trying to send. This gives a clearer error.
-  try {
-    await transporter.verify();
-    console.log('✅ SMTP Connection verified successfully.');
-  } catch (error) {
-    console.error('❌ SMTP Connection verification failed. Please check your .env.local settings, firewall, and antivirus.', error);
-    // Re-throw to prevent sending attempt
-    throw new Error('SMTP connection failed verification.');
-  }
 
   // Define mail options
   try {
