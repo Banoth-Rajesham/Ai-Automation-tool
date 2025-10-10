@@ -210,34 +210,23 @@ app.post('/api/track-reply', async (req: Request, res: Response) => {
  * Helper function to send an email using Nodemailer.
  */
 async function sendEmailHelper(to: string, subject: string, htmlBody: string, attachments: any[] = []) {
-  // Create a single, reusable transporter for sending emails
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT),
-    secure: process.env.SMTP_SECURE === 'true',
-    // Increase timeouts and add explicit TLS options for better reliability
-    connectionTimeout: 30000, // 30 seconds
-    socketTimeout: 30000, // 30 seconds
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-    tls: {
-      // Enforce a modern version of TLS
-      minVersion: 'TLSv1.2'
-    },
-  });
+  const resend = new Resend(process.env.RESEND_API_KEY);
 
-  // Define mail options
   try {
-    const info = await transporter.sendMail({
-      from: `"MORPHIUS AI" <${process.env.SMTP_USER}>`,
+    const { data, error } = await resend.emails.send({
+      from: 'MORPHIUS AI <onboarding@resend.dev>', // Use the Resend test address for now
       to: to,
       subject: subject,
       html: htmlBody,
       attachments: attachments,
     });
-    console.log(`Email sent successfully to ${to}: ${info.messageId}`);
+
+    if (error) {
+      console.error(`Failed to send email to ${to} via Resend:`, error);
+      return false;
+    }
+
+    console.log(`Email sent successfully to ${to} via Resend: ${data?.id}`);
     return true;
   } catch (error: any) {
     console.error(`Failed to send email to ${to}:`, error);
@@ -405,12 +394,7 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
     }
   } catch (error: any) {
     console.error('Failed to send initial email:', error);
-    // Provide a more specific error message for authentication issues
-    if (error.code === 'ETIMEDOUT') {
-      return res.status(500).json({ message: `Connection to SMTP server timed out. Please check your SMTP_HOST and SMTP_PORT in .env.local and ensure no firewall is blocking the connection.`, error: error.message });
-    } else if (error.code === 'EAUTH') {
-      return res.status(500).json({ message: 'Authentication error: Invalid SMTP credentials. Please check your SMTP_USER and SMTP_PASS in .env.local.', error: error.message });
-    }
+    // Generic error for API-based sending
     return res.status(500).json({ message: 'An unknown error occurred while sending the email.', error: error.message });
   }
 });
