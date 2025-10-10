@@ -38,6 +38,17 @@ if (!signatureImagePath) {
     console.warn('Signature image not found in /public folder. Falling back to text signature.');
 }
 
+// --- Environment Variable Check ---
+const requiredEnvVars = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS'];
+const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingVars.length > 0) {
+  console.error(`❌ Critical Error: Missing required environment variables: ${missingVars.join(', ')}`);
+  console.error('Please set these variables in your .env file for local development or in your hosting provider (Render) for production.');
+  process.exit(1); // Exit the process with an error code
+}
+
+
 // PostgreSQL connection pool
 const isProduction = process.env.NODE_ENV === 'production';
 

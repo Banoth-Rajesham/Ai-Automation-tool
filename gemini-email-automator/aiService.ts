@@ -829,14 +829,22 @@ export const processUserPrompt = async (prompt: string, allProspects: Prospect[]
                 const sendEmail = async (prospect: Prospect) => {
                   const content = emailContentMap.get(prospect.id);
                   if (!content) throw new Error(`No AI content for ${prospect.full_name}`);
+
                   const emailHtml = generateHtmlBody(prospect, content.intro, content.bullet_points, content.closing, false);
-                  await axios.post('/api/send-email', {
-                    to: prospect.work_email,
-                    subject: 'Unlock Your Data Potential at MORPHIUS AI',
-                    body: emailHtml,
-                    prospectId: prospect.id // Pass prospectId for tracking links
-                  });
-                  return { status: "✅ Sent", to: prospect.work_email, subject: `Email for ${prospect.full_name}` };
+                  const subject = content.subject || `An idea for ${prospect.company || 'your company'}`;
+
+                  try {
+                    await axios.post('/api/send-email', {
+                      to: prospect.work_email,
+                      subject: subject,
+                      body: emailHtml,
+                      prospectId: prospect.id // Pass prospectId for tracking links
+                    });
+                    return { status: "✅ Sent", to: prospect.work_email, subject: `Email for ${prospect.full_name}` };
+                  } catch (error: any) {
+                    // Throw a more specific error if the API call fails
+                    throw new Error(error.response?.data?.message || error.message || 'Unknown error sending email');
+                  }
                 };
 
                 const sentEmailsLog: any[] = [];
@@ -856,7 +864,16 @@ export const processUserPrompt = async (prompt: string, allProspects: Prospect[]
                   });
                   return []; // processInBatches expects an array, but we handle results internally.
                 }, onProgress);
-                return { text: `✅ Campaign complete. Sent ${successCount} emails. ${errorCount > 0 ? `Failed to send ${errorCount} emails.` : ''}`, data: sentEmailsLog };
+
+                let summaryText: string;
+                if (errorCount > 0 && successCount === 0) {
+                    summaryText = `❌ Campaign failed. Could not send any of the ${errorCount} email(s). Please check the server logs for details.`;
+                } else if (errorCount > 0) {
+                    summaryText = `⚠️ Campaign partially complete. Sent ${successCount} emails, but failed to send ${errorCount} email(s).`;
+                } else {
+                    summaryText = `✅ Campaign complete. Sent ${successCount} emails successfully.`;
+                }
+                return { text: summaryText, data: sentEmailsLog };
 
               } else {
                 // --- Logic for Generating Previews ---
@@ -876,7 +893,13 @@ export const processUserPrompt = async (prompt: string, allProspects: Prospect[]
                         ? generateHtmlBody(prospect, content.intro, content.bullet_points, content.closing, true)
                         : generateHtmlBody(prospect, null, null, null, true); // Fallback case
 
-                    return { prospect_name: prospect.full_name || 'N/A', email: prospect.work_email, subject: 'Unlock Your Data Potential at MORPHIUS AI', body: emailHtml, warning: content ? undefined : "AI content generation failed for this prospect." };
+                    return {
+                        prospect_name: prospect.full_name || 'N/A',
+                        email: prospect.work_email,
+                        subject: content?.subject || `An idea for ${prospect.company || 'your company'}`,
+                        body: emailHtml,
+                        warning: content ? undefined : "AI content generation failed for this prospect."
+                    };
                 });
 
                 return { text: `✅ Generated ${previews.length} email previews.`, previews: previews };
@@ -922,9 +945,10 @@ function getBulkGenerationPrompt(): string {
 ### Your Task:
 For each prospect in the input, generate a JSON object with:
 1.  "id": The prospect's ID.
-2.  "intro": A personalized opening paragraph connecting MORPHIUS AI to the prospect's role and industry.
-3.  "bullet_points": An array of 2-3 short bullet points highlighting specific, relevant benefits.
-4.  "closing": A closing paragraph with a clear call to action for a 15-minute call.
+2.  "subject": A compelling, personalized subject line (under 70 characters).
+3.  "intro": A personalized opening paragraph connecting MORPHIUS AI to the prospect's role and industry.
+4.  "bullet_points": An array of 2-3 short bullet points highlighting specific, relevant benefits.
+5.  "closing": A closing paragraph with a clear call to action for a 15-minute call.
 
 Return a single JSON object with an "emails" key, which is an array of these individual prospect JSON objects.
 `;
