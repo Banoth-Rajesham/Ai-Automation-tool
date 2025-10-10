@@ -381,19 +381,19 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
     finalHtmlBody = body.replace('[SIGNATURE_IMAGE]', textSignature);
   }
 
-  // Read the attachment file content into a buffer for Resend
-  const finalAttachments = attachments.map(att => {
-    if (att.path) {
-      return {
-        filename: att.filename,
-        content: fs.readFileSync(att.path),
-        cid: att.cid,
-      };
-    }
-    return att;
-  });
-
   try {
+    // Read the attachment file content into a buffer for Resend
+    const finalAttachments = attachments.map(att => {
+      if (att.path) {
+        return {
+          filename: att.filename,
+          content: fs.readFileSync(att.path),
+          cid: att.cid,
+        };
+      }
+      return att;
+    });
+
     // Use the centralized helper function to send the email
     const success = await sendEmailHelper(to as string, subject as string, finalHtmlBody, finalAttachments);
     // The helper now throws on failure, so if we get here, it was successful.
