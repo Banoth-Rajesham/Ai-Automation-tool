@@ -400,8 +400,8 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
     const success = await sendEmailHelper(to as string, subject as string, finalHtmlBody, attachments);
     // The helper now throws on failure, so if we get here, it was successful.
     if (success) {
-      res.status(200).json({ message: `Email sent successfully to ${to}` });
-    } // This else block is unreachable because sendEmailHelper throws on error.
+      return res.status(200).json({ message: `Email sent successfully to ${to}` });
+    }
   } catch (error: any) {
     console.error('Failed to send initial email:', error);
     // Provide a more specific error message for authentication issues
