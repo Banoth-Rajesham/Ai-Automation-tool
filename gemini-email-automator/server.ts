@@ -381,32 +381,6 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
     finalHtmlBody = body.replace('[SIGNATURE_IMAGE]', textSignature);
   }
 
-  // Read the attachment file content into a buffer for Resend
-  const finalAttachments = attachments.map(att => {
-    if (att.path) {
-      return {
-        filename: att.filename,
-        content: fs.readFileSync(att.path),
-        cid: att.cid,
-      };
-    }
-    return att;
-  });
-
-  try {
-    // Use the centralized helper function to send the email
-    const success = await sendEmailHelper(to as string, subject as string, finalHtmlBody, finalAttachments);
-    // The helper now throws on failure, so if we get here, it was successful.
-    if (success) {
-      return res.status(200).json({ message: `Email sent successfully to ${to}` });
-    } else {
-        <strong>MORPHIUS AI Team</strong><br>
-        <a href="mailto:hello@morphius.in" style="color: #1a0dab;">hello@morphius.in</a><br>+91 7981809795<br><a href="https://www.morphius.in" style="color: #1a0dab;" target="_blank">https://www.morphius.in</a>
-        <p style="margin-top: 20px; font-size: 12px; color: #888888;">If you no longer wish to receive these emails, you can <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=unsubscribe" style="color: #888888;" target="_blank">unsubscribe here</a>.</p>
-      </div>`;
-    finalHtmlBody = body.replace('[SIGNATURE_IMAGE]', textSignature);
-  }
-
   try {
     // Use the centralized helper function to send the email
     const success = await sendEmailHelper(to as string, subject as string, finalHtmlBody, attachments);
