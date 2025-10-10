@@ -400,15 +400,10 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
   }
 });
 
-// --- Serve Static Frontend Files (for Production) ---
-// This block must be AFTER all API routes.
+// --- Serve Static Frontend Files (for Production) --- This block must be AFTER all API routes.
 if (process.env.NODE_ENV === 'production') {
   const clientBuildPath = path.join(__dirname, '..', 'dist');
   app.use(express.static(clientBuildPath));
-
-  // Serve other static assets from the 'public' directory if they exist
-  const publicPath = path.join(process.cwd(), 'public');
-  app.use(express.static(publicPath));
 
   // For any other request that doesn't match an API route,
   // serve the index.html file for client-side routing.
