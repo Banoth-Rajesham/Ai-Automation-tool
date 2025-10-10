@@ -1,8 +1,10 @@
 import dotenv from 'dotenv';
-// Load environment variables from .env.local (or .env)
-const envPath = process.env.NODE_ENV === 'production' ? '.env' : '.env.local';
-dotenv.config({ path: envPath });
-dotenv.config(); // Also load .env as a fallback
+
+// Load environment variables. In production (Render), these are set directly.
+// For local development, load them from .env.local.
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config({ path: '.env.local' });
+}
 
 import express, { Request, Response } from 'express';
 import cors from 'cors';
