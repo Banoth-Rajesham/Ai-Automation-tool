@@ -41,7 +41,7 @@ if (!signatureImagePath) {
 }
 
 // --- Environment Variable Check ---
-const requiredEnvVars = ['RESEND_API_KEY', 'BACKEND_URL'];
+const requiredEnvVars = ['RESEND_API_KEY', 'BACKEND_URL', 'RESEND_FROM_EMAIL', 'RESEND_SANDBOX_TO_EMAIL'];
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingVars.length > 0) {
@@ -210,13 +210,22 @@ app.post('/api/track-reply', async (req: Request, res: Response) => {
  * Helper function to send an email using Nodemailer.
  */
 async function sendEmailHelper(to: string, subject: string, htmlBody: string, attachments: any[] = []) {
-  const resend = new Resend(process.env.RESEND_API_KEY);
+  const resend = new Resend(process.env.RESEND_API_KEY as string);
+
+  let finalTo = to;
+  let finalSubject = subject;
+
+  // In sandbox mode (no verified domain), redirect all emails to the developer's inbox for testing.
+  if (process.env.RESEND_SANDBOX_TO_EMAIL) {
+    finalTo = process.env.RESEND_SANDBOX_TO_EMAIL;
+    finalSubject = `[Sent to: ${to}] ${subject}`;
+  }
 
   try {
     const { data, error } = await resend.emails.send({
-      from: 'MORPHIUS AI <onboarding@resend.dev>', // Use the Resend test address for now
-      to: to,
-      subject: subject,
+      from: process.env.RESEND_FROM_EMAIL as string,
+      to: finalTo,
+      subject: finalSubject,
       html: htmlBody,
       attachments: attachments,
     });
