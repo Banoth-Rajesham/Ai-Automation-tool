@@ -579,75 +579,73 @@ async function handleWebScraping(prompt: string): Promise<AssistantMessageData> 
   const urlRegex = /^(https?:\/\/[^\s/$.?#].[^\s]*)$/i;
   let scrapeTargets: string[] = [];
 
+  // If the prompt is a direct URL, scrape it. Otherwise, use Jina Search.
   if (urlRegex.test(prompt)) {
     scrapeTargets = [prompt];
   } else {
-    // Step 1: Find initial search results (e.g., blog posts, ranking sites)
-    const initialSearchPrompt = `You are a web search expert. Find up to 5 relevant URLs for the user's query. The URLs can be for articles, lists, or homepages. Return a JSON object with a "urls" array.
-Query: "${prompt}"`;
-    const initialResult = await getJsonFromOpenAI(initialSearchPrompt, prompt);
-    const initialUrls = initialResult.urls || [];
-
-    if (initialUrls.length === 0) {
-        return { text: `I couldn't find any initial web pages for your query: "${prompt}".` };
-    }
-
-    // Step 2: Scrape initial URLs to find the *actual* target domains/contact pages.
-    const deepDiveFinderPrompt = `You are a Retrieval-Augmented Generation (RAG) agent. Your task is to extract URLs from the provided CONTEXT that are relevant to the USER_QUERY.
-### USER_QUERY
-"${prompt}"
-### INSTRUCTIONS
-1.  Analyze the CONTEXT below.
-2.  Extract official website URLs for organizations that directly match the USER_QUERY.
-3.  **Prioritize** direct links to pages like "Contact Us", "About Us", "Our Team", "Leadership", or "Directory".
-4.  If no specific sub-page is found for a relevant organization, **you MUST return its main homepage URL** (e.g., 'https://example.com'). Do not give up.
-
-Return a valid JSON object with a single key "urls", which is an array of unique, fully-qualified URL strings.`;
-
-    const deepDivePromises = initialUrls.map(async (url: string) => {
-        const readerResponse = await axios.get(`https://r.jina.ai/${url}`, { headers: { 'Accept': 'application/json', 'x-api-key': `Bearer ${jinaApiKey}` } });
-        const pageContent = readerResponse.data.data.content;
-        return getJsonFromOpenAI(deepDiveFinderPrompt, pageContent);
-    });
-
-    const deepDiveResults = await Promise.allSettled(deepDivePromises);
-    const finalUrls = deepDiveResults.flatMap(res => res.status === 'fulfilled' ? res.value.urls : []).filter(Boolean);
-    scrapeTargets = [...new Set(finalUrls)]; // Deduplicate URLs
+    // Use Jina Search API for general queries. It's much faster and more direct.
+    // Use the backend proxy for Jina Search
+    const searchResponse = await axios.get(`/api/jina-proxy?type=search&url=${encodeURIComponent(prompt)}`);
+    scrapeTargets = (searchResponse.data?.data || []).slice(0, 3).map((result: any) => result.url);
   }
 
+  // --- Deep Dive Step ---
+  // Scrape the initial search results to find the actual company websites.
+  const deepDiveFinderPrompt = `You are a data extraction agent. Your task is to extract the main website URLs of the companies or organizations mentioned in the provided TEXT that are relevant to the USER_QUERY.
+
+### USER_QUERY
+"${prompt}"
+
+### INSTRUCTIONS
+1.  Analyze the TEXT below.
+2.  Extract the official homepage URLs for organizations that directly match the USER_QUERY.
+3.  **Do not** extract links to social media, articles, or sub-pages. Only return the main domain (e.g., 'https://flipkart.com', 'https://amazon.in').
+
+Return a valid JSON object with a single key "urls", which is an array of unique, fully-qualified URL strings. If no relevant company homepages are found, return {"urls": []}.`;
+
+  const extractedUrls: string[] = [];
+  for (const url of scrapeTargets) {
+    try {
+      const readerResponse = await axios.get(`/api/jina-proxy?url=${encodeURIComponent(url)}`);
+      let pageContent = readerResponse.data?.data?.content || '';
+      // Truncate content to avoid exceeding token limits for URL extraction
+      if (pageContent.length > 20000) {
+        pageContent = pageContent.substring(0, 20000);
+      }
+      const result = await getJsonFromOpenAI(deepDiveFinderPrompt, pageContent);
+      if (result.urls && Array.isArray(result.urls)) {
+        extractedUrls.push(...result.urls);
+      }
+    } catch (error) {
+      console.warn(`Could not perform deep dive on ${url}:`, error);
+    }
+  }
+  const finalUrls = extractedUrls;
+  const finalScrapeTargets = [...new Set(finalUrls)]; // Deduplicate URLs
+
   if (scrapeTargets.length === 0) {
-    return { text: `⚠️ I analyzed the initial search results but couldn't find any specific company or university websites to scrape.` };
+    return { text: `⚠️ I searched for "${prompt}" but couldn't find any relevant websites to scrape.` };
   }
 
   const allLeads: any[] = [];
-  const visitedUrls = new Set<string>();
-  const queue: { url: string; depth: number }[] = scrapeTargets.map(url => ({ url, depth: 0 }));
-  const MAX_DEPTH = 2; // Control how deep the crawler goes.
+  const MAX_DEPTH = 0; // Crawling is disabled for now to keep it fast. Can be increased later.
   let pagesScraped = 0;
 
-  while (queue.length > 0) {
-    const { url, depth } = queue.shift()!;
-
-    const baseUrl = new URL(url).origin;
-    // Normalize URL to avoid re-visiting slight variations
-    const normalizedUrl = new URL(url, baseUrl).href.replace(/#.*$/, '');
-
-    if (visitedUrls.has(normalizedUrl) || !normalizedUrl.startsWith(baseUrl)) {
-      continue;
-    }
-
-    visitedUrls.add(normalizedUrl);
+  // Scrape each of the target URLs found.
+  for (const url of finalScrapeTargets.length > 0 ? finalScrapeTargets : scrapeTargets) {
     pagesScraped++;
-
+    const depth = 0; // Define the depth variable
     try {
       // --- Scrape the current page for leads ---
-      const readerResponse = await axios.get(`https://r.jina.ai/${normalizedUrl}`, {
-        headers: { 'Accept': 'application/json', 'x-api-key': `Bearer ${jinaApiKey}` },
-      });
-      const pageContent = readerResponse.data.data.content;
+      const readerResponse = await axios.get(`/api/jina-proxy?url=${encodeURIComponent(url)}`);
+      let pageContent = readerResponse.data?.data?.content || '';
+
+      // Truncate content to avoid exceeding token limits (approx. 15k characters ~ 4k tokens)
+      if (pageContent.length > 15000) {
+        pageContent = pageContent.substring(0, 15000);
+      }
 
       const leadExtractionSystemPrompt = `You are a data processing engine. Your only function is to extract information from the provided TEXT based on the key subjects in the USER_QUERY. You have no memory or prior knowledge.
-
 ### USER_QUERY:
 "${prompt}"
 
@@ -665,7 +663,7 @@ Your entire output must be a single JSON object. This object must have one key: 
       if (leads && leads.length > 0) {
         const leadsWithSource = leads.map((lead: any) => ({
           ...lead,
-          source_details: `Scraped from ${normalizedUrl}`,
+          source_details: `Scraped from ${url}`,
           query: prompt,
         }));
         allLeads.push(...leadsWithSource);
@@ -673,28 +671,9 @@ Your entire output must be a single JSON object. This object must have one key: 
 
       // --- Discover and enqueue new links if within depth limit ---
       if (depth < MAX_DEPTH) {
-        const linkFinderPrompt = `You are a web crawler. From the provided text content, extract all unique internal URLs.
-        - Base URL: "${baseUrl}"
-        - Keywords: "about", "contact", "team", "careers", "news", "blog", "departments", "services", "products", "admissions", "faculty", "programs", "events", "courses"
-        
-        Rules:
-        1. Only return URLs that start with the Base URL or are relative paths.
-        2. Prioritize URLs whose path contains one of the keywords.
-        3. Do not return external links or links to files (e.g., .pdf, .jpg).
-        4. Return a JSON object with a single key "urls", which is an array of absolute URL strings.`;
-
-        const linkResult = await getJsonFromOpenAI(linkFinderPrompt, pageContent);
-        if (linkResult.urls && Array.isArray(linkResult.urls)) {
-          for (const newUrl of linkResult.urls) {
-            const absoluteUrl = new URL(newUrl, baseUrl).href;
-            if (!visitedUrls.has(absoluteUrl) && absoluteUrl.startsWith(baseUrl)) {
-              queue.push({ url: absoluteUrl, depth: depth + 1 });
-            }
-          }
-        }
       }
     } catch (error: any) {
-      console.error(`Failed to process ${normalizedUrl}:`, error.message);
+      console.error(`Failed to process ${url}:`, error.message);
       continue; // Continue to the next URL in the queue
     }
   }
