@@ -839,8 +839,24 @@ export const processUserPrompt = async (prompt: string, allProspects: Prospect[]
                   return { status: "✅ Sent", to: prospect.work_email, subject: `Email for ${prospect.full_name}` };
                 };
 
-                const sentEmailsLog = await processInBatches(prospectsToProcess, 10, (batch) => Promise.all(batch.map(sendEmail)), onProgress);
-                return { text: `✅ Campaign complete. Processed ${sentEmailsLog.length} emails.`, data: sentEmailsLog.flat() };
+                const sentEmailsLog: any[] = [];
+                let successCount = 0;
+                let errorCount = 0;
+
+                await processInBatches(prospectsToProcess, 10, async (batch) => {
+                  const results = await Promise.allSettled(batch.map(sendEmail));
+                  results.forEach((result, index) => {
+                    if (result.status === 'fulfilled') {
+                      sentEmailsLog.push(result.value);
+                      successCount++;
+                    } else {
+                      errorCount++;
+                      console.error(`Failed to send email to ${batch[index].work_email}:`, result.reason.message || result.reason);
+                    }
+                  });
+                  return []; // processInBatches expects an array, but we handle results internally.
+                }, onProgress);
+                return { text: `✅ Campaign complete. Sent ${successCount} emails. ${errorCount > 0 ? `Failed to send ${errorCount} emails.` : ''}`, data: sentEmailsLog };
 
               } else {
                 // --- Logic for Generating Previews ---
