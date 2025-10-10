@@ -351,11 +351,6 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
           </td>
         </tr>
         <tr>
-          <td style="padding-top: 15px;">
-            <img src="cid:${signatureCid}" alt="MORPHIUS AI Logo" width="150" style="display: block; max-width: 150px; height: auto;">
-          </td>
-        </tr>
-        <tr>
           <td style="padding-top: 20px; text-align: center; font-family: Arial, sans-serif;">
             <p style="margin: 0 0 10px 0; font-size: 13px; color: #555555;"><strong>Quick Reply:</strong></p>
             <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=interested" style="background-color: #4CAF50; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; margin: 0 5px;" target="_blank">I'm Interested</a>
@@ -375,6 +370,36 @@ app.post('/api/send-email', async (req: Request, res: Response) => {
     const textSignature = `
       <div style="font-size: 14px; color: #555555; line-height: 1.4; font-family: Arial, sans-serif;">
         Best regards,<br>
+        <strong>MORPHIUS AI Team</strong><br>
+        <a href="mailto:hello@morphius.in" style="color: #1a0dab;">hello@morphius.in</a><br>+91 7981809795<br><a href="https://www.morphius.in" style="color: #1a0dab;" target="_blank">https://www.morphius.in</a>
+        <p style="margin-top: 20px; text-align: center; font-family: Arial, sans-serif;">
+            <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=interested" style="background-color: #4CAF50; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; margin: 0 5px;" target="_blank">I'm Interested</a>
+            <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=more_info" style="background-color: #008CBA; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; margin: 0 5px;" target="_blank">Send More Info</a>
+        </p>
+        <p style="margin-top: 20px; font-size: 12px; color: #888888; text-align: center;">If you no longer wish to receive these emails, you can <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=unsubscribe" style="color: #888888;" target="_blank">unsubscribe here</a>.</p>
+      </div>`;
+    finalHtmlBody = body.replace('[SIGNATURE_IMAGE]', textSignature);
+  }
+
+  // Read the attachment file content into a buffer for Resend
+  const finalAttachments = attachments.map(att => {
+    if (att.path) {
+      return {
+        filename: att.filename,
+        content: fs.readFileSync(att.path),
+        cid: att.cid,
+      };
+    }
+    return att;
+  });
+
+  try {
+    // Use the centralized helper function to send the email
+    const success = await sendEmailHelper(to as string, subject as string, finalHtmlBody, finalAttachments);
+    // The helper now throws on failure, so if we get here, it was successful.
+    if (success) {
+      return res.status(200).json({ message: `Email sent successfully to ${to}` });
+    } else {
         <strong>MORPHIUS AI Team</strong><br>
         <a href="mailto:hello@morphius.in" style="color: #1a0dab;">hello@morphius.in</a><br>+91 7981809795<br><a href="https://www.morphius.in" style="color: #1a0dab;" target="_blank">https://www.morphius.in</a>
         <p style="margin-top: 20px; font-size: 12px; color: #888888;">If you no longer wish to receive these emails, you can <a href="${process.env.BACKEND_URL}/api/quick-reply-action?prospectId=${prospectId}&prospectEmail=${to}&action=unsubscribe" style="color: #888888;" target="_blank">unsubscribe here</a>.</p>
