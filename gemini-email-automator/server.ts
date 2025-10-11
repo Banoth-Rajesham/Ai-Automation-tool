@@ -58,10 +58,8 @@ const openai = new OpenAI({
 
 
 // PostgreSQL connection pool
-const isProduction = process.env.NODE_ENV === 'production';
-
 const pool = new Pool(
-  isProduction
+  process.env.DATABASE_URL
     ? {
         connectionString: process.env.DATABASE_URL,
         ssl: { rejectUnauthorized: false }, // Required for Render connections
